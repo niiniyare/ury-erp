@@ -21,7 +21,12 @@ def uninstall():
 
 	ROLES = ["URY Manager", "URY Captain", "URY Cashier", "URY Admin"]
 
-	frappe.db.delete("Custom DocPerm",{"role": ["in", ROLES]})
+	frappe.db.delete("Custom DocPerm", {"role": ["in", ROLES]})
 
-	print ("* removing URY Roles...")
-	frappe.db.delete("Role", {"name": ["in", ROLES]})
+	print("* removing URY Roles...")
+	for role in ROLES:
+		try:
+			frappe.delete_doc("Role", role, ignore_missing=True)
+		except Exception as e:
+			frappe.log_error(title=f"URY uninstall: could not remove role {role}")
+			print(f"  - kept '{role}': still referenced elsewhere ({e})")

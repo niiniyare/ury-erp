@@ -28,8 +28,8 @@ ury/                          ← repo root
 ├── mosaic/                   ← Vue 3 KOT kitchen display app
 ├── urypos/                   ← Vue 3 POS frontend (v1, legacy)
 ├── DEMO/                     ← Demo screenshots / assets
-├── requirements.txt          ← Python dependencies
-├── setup.py                  ← Python package setup
+├── requirements.txt          ← Python dependencies (comments only; see pyproject.toml for declared deps)
+├── pyproject.toml            ← Python package metadata (PEP 517, flit_core backend)
 ├── package.json              ← Yarn classic workspace root (workspaces: packages/*, pos, frontend)
 └── FEATURES.md / README.md   ← Human-readable documentation
 ```
@@ -44,7 +44,7 @@ Root `package.json` defines yarn classic **workspaces** for `packages/*`, `pos`,
 ury/
 ├── hooks.py              ← App registration, doc_events, scheduler, fixtures
 ├── patches.txt           ← Migration patch list
-├── setup.py              ← Custom field creation (add_custom_fields)
+├── setup_customizations.py ← Custom field creation (get_custom_fields + create_custom_fields)
 ├── uninstall.py          ← Cleanup on app removal
 ├── install.py            ← Post-install setup
 ├── permission.py         ← check_app_permission for app screen
@@ -129,7 +129,7 @@ ury/
 | `URY Cost of Goods` | COGS tracking doctype. |
 | `Sub POS Closing` | POS closing record per cashier. |
 
-**Custom fields added to standard ERPNext doctypes** (via `setup.py` + `fixtures/custom_field.json`):
+**Custom fields added to standard ERPNext doctypes** (via `setup_customizations.py` + `fixtures/custom_field.json`):
 - `POS Invoice` / `Sales Invoice`: `order_type`, `waiter`, `no_of_pax`, `cashier`, `restaurant`, `branch`, `restaurant_table`, `invoice_printed`, `cancel_reason`, `custom_comments`, `custom_ury_order_number`
 - `POS Profile`: `restaurant`, `branch`, `printer_settings`, `qz_print`, `qz_host`, `enable_discount`, `enable_multiple_cashier`, `reset_order_number_daily`
 - `POS Opening Entry`: `restaurant`, `branch`, `custom_room`, `custom_rooms`
@@ -240,7 +240,7 @@ After building, run `bench build --app ury` to copy assets to the Frappe public 
 
 **To add a custom field to a standard doctype:**
 → Add via Frappe desk, then export with `bench export-fixtures --app ury`.
-→ OR add programmatically in `ury/setup.py` `add_custom_fields()`.
+→ OR add programmatically in `ury/setup_customizations.py`'s `get_custom_fields()`.
 
 **To add a migration patch:**
 → Create file in `ury/patches/v<major>_<minor>/`.

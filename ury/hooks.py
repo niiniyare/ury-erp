@@ -8,7 +8,7 @@ app_email = "info@tridz.com"
 app_license = "MIT"
 app_logo_url = "/assets/ury/Images/ury-logo.jpg"
 app_icon_title = "URY"
-required_apps = ["erpnext"]
+required_apps = ["erpnext", "hrms"]
 # Includes in <head>
 # ------------------
 add_to_apps_screen = [
@@ -454,5 +454,9 @@ fixtures = [
     },
     {"dt": "Role", "filters": [["role_name", "like", "URY %"]]},
     {"doctype": "Role", "filters": [["role_name", "in", ["Self Ordering Manager"]]]},
-    "Client Script",
+    {"doctype": "Client Script", "filters": [["module", "=", "URY"]]},
+    {
+        "doctype": "Custom HTML Block",
+        "filters": [["name", "in", ["URY POS", "POS V1"]]],
+    },
 ]

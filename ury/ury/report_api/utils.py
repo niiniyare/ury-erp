@@ -3,19 +3,55 @@ import frappe
 
 def require_manager():
 	"""Raise frappe.PermissionError unless the current user is a URY Manager,
-	System Manager, or Administrator. Every report_api endpoint must call this
+	URY Admin, Manager, System Manager, or Administrator. Every report_api endpoint must call this
 	first — the frontend's AuthGuard hides the nav item but is not a security
 	boundary on its own.
 	"""
-	allowed_roles = {"URY Manager", "System Manager"}
+	allowed_roles = {"URY Manager", "URY Admin", "Manager", "System Manager"}
 	user_roles = set(frappe.get_roles())
 	if frappe.session.user == "Administrator":
 		return
 	if not allowed_roles & user_roles:
 		frappe.throw(
-			"You do not have permission to access this report.",
+			"You do not have permission to access this resource.",
 			frappe.PermissionError,
 		)
+
+
+def user_has_branch_access(user, branch):
+	"""True if `user` is assigned to `branch` via Branch's `user` child table
+	(rows of URY User, each linking a User in its own `user` field), or if
+	`user` is Administrator or holds the System Manager role — matching the
+	admin-bypass convention used by require_manager() so admins are never
+	locked out.
+
+	Shared by the staff-facing WRITE endpoints that accept a caller-supplied
+	branch (record_yield_check in ury_yield_variance, and
+	create_issue_authorization in ury_issue_authorization) to confirm the
+	calling user is actually assigned to that specific branch, not merely
+	that some branch/company value was supplied. Not used by the
+	manager-gated reporting endpoints (get_yield_variance,
+	get_yield_check_compliance), which intentionally rely on
+	require_manager() instead — managers may report across branches they
+	oversee even without a Branch.user row.
+	"""
+	if not user or not branch:
+		return False
+	if user == "Administrator":
+		return True
+	if "System Manager" in frappe.get_roles(user):
+		return True
+	return bool(
+		frappe.db.exists(
+			"URY User",
+			{
+				"parenttype": "Branch",
+				"parent": branch,
+				"parentfield": "user",
+				"user": user,
+			},
+		)
+	)
 
 
 def get_business_day_condition(date_expr="curdate()", prefix="b"):

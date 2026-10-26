@@ -19,17 +19,19 @@ const selectVariants = cva(
       variant: {
         default: "border-gray-200 hover:border-gray-300 focus-visible:border-primary",
         error:
-          "border-red-300 hover:border-red-400 focus-visible:border-red-500 focus-visible:ring-red-500",
+          "border-destructive/40 hover:border-destructive/60 focus-visible:border-destructive focus-visible:ring-destructive",
         success:
-          "border-green-300 hover:border-green-400 focus-visible:border-green-500 focus-visible:ring-green-500",
+          "border-success-300 hover:border-success-400 focus-visible:border-success-500 focus-visible:ring-success-500",
       },
       // Right padding is set per-size rather than once on the base: the base's
       // `pr-8` was being clobbered by each size's `px-*` (later class wins in
       // tailwind-merge), so the chevron sat on top of long option text.
       size: {
-        default: "h-11 pl-3.5 pr-10 py-2 text-sm",
+        default: "h-9 pl-3.5 pr-9 py-1.5 text-[13px] rounded-[7px]",
         sm: "h-9 pl-3 pr-8 py-1.5 text-xs",
         lg: "h-12 pl-4 pr-11 py-3 text-base",
+        // Alias of `default` — see Input.
+        compactLg: "h-9 pl-3.5 pr-9 py-1.5 text-[13px] rounded-[7px]",
       },
     },
     defaultVariants: {
@@ -58,12 +60,15 @@ const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
     };
 
     return (
-      <div className="relative w-full">
+      // className lands on the wrapper (same as DatePicker) so width utilities
+      // like w-[130px] actually size the control in a filter toolbar. The
+      // <select> keeps w-full from selectVariants and fills the wrapper.
+      <div className={cn("relative w-full", className)}>
         <select
           ref={ref}
           value={value}
           onChange={handleChange}
-          className={cn(selectVariants({ variant: selectVariant, size, className }))}
+          className={cn(selectVariants({ variant: selectVariant, size }))}
           {...props}
         >
           {placeholder && (

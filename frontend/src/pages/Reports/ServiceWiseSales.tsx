@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { call, formatCurrency } from '@ury/core';
-import { StatCard, DataTable, type DataTableColumn } from '@ury/ui';
-import { IndianRupee, Receipt, TrendingUp } from 'lucide-react';
+import { KpiStrip, DataTable, type DataTableColumn, PageHeader } from '@ury/ui';
 import { useBranchContext } from '../../context/BranchContext';
 import { DateRangeFilter, type DateRangeValue } from '../../components/reports/DateRangeFilter';
 import { PieChartCard } from '../../components/reports/charts/PieChartCard';
@@ -23,7 +22,7 @@ interface ServiceWiseSalesData {
 
 const columns: DataTableColumn<ServiceRow>[] = [
   { key: 'order_type', header: 'Order Type' },
-  { key: 'order_count', header: '# Orders', align: 'right' },
+  { key: 'order_count', header: 'Orders', align: 'right' },
   { key: 'revenue', header: 'Revenue', render: (r) => formatCurrency(r.revenue), align: 'right' },
   { key: 'avg_order_value', header: 'Avg Order Value', render: (r) => formatCurrency(r.avg_order_value), align: 'right' },
   { key: 'percentage_of_total', header: '% of Total', render: (r) => `${r.percentage_of_total}%`, align: 'right' },
@@ -63,15 +62,11 @@ export function ServiceWiseSales() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Service Wise Sales</h1>
-          <p className="text-sm text-muted-foreground">
-            Revenue by order type {activeBranchId === 'all' ? '· All Branches' : ''}
-          </p>
-        </div>
-        <DateRangeFilter value={range} onChange={setRange} />
-      </div>
+      <PageHeader
+        title="Service Wise Sales"
+        description={`Revenue by order type ${activeBranchId === 'all' ? '· All Branches' : ''}`}
+        actions={<DateRangeFilter value={range} onChange={setRange} />}
+      />
 
       {error && (
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -80,22 +75,16 @@ export function ServiceWiseSales() {
       )}
 
       {isLoading && !data ? (
-        <div className="text-sm text-muted-foreground">Loading...</div>
+        <div className="text-sm text-muted-foreground">Loading…</div>
       ) : data ? (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <StatCard
-              label="Total Revenue"
-              value={formatCurrency(data.summary.total_revenue)}
-              icon={<IndianRupee className="w-4 h-4" />}
-            />
-            <StatCard label="Total Orders" value={data.summary.total_orders} icon={<Receipt className="w-4 h-4" />} />
-            <StatCard
-              label="Avg Order Value"
-              value={formatCurrency(data.summary.avg_order_value)}
-              icon={<TrendingUp className="w-4 h-4" />}
-            />
-          </div>
+          <KpiStrip
+            items={[
+              { label: 'Total Revenue', value: formatCurrency(data.summary.total_revenue) },
+              { label: 'Total Orders', value: data.summary.total_orders },
+              { label: 'Avg Order Value', value: formatCurrency(data.summary.avg_order_value) },
+            ]}
+          />
 
           <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
             <div className="lg:col-span-2">

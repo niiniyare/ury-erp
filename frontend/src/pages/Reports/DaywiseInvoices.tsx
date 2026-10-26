@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { call, formatCurrency } from '@ury/core';
-import { DataTable, type DataTableColumn, Button } from '@ury/ui';
+import { DataTable, type DataTableColumn, Button, PageHeader } from '@ury/ui';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useBranchContext } from '../../context/BranchContext';
 import { DateRangeFilter, type DateRangeValue } from '../../components/reports/DateRangeFilter';
+import { DeskLink } from '../../components/DeskLink';
 import { startOfMonth, endOfDay } from 'date-fns';
 import { toApiDate } from '../../lib/reportDate';
 
@@ -30,7 +31,17 @@ interface DaywiseInvoicesData {
 const columns: DataTableColumn<InvoiceRow>[] = [
   { key: 'date', header: 'Date' },
   { key: 'time', header: 'Time' },
-  { key: 'invoice', header: 'Invoice' },
+  {
+    key: 'invoice',
+    header: 'Invoice',
+    render: (r) => (
+      <span className="inline-flex items-center gap-1.5">
+        {r.invoice}
+        {/* Link to editable desk document; this report is read-only */}
+        <DeskLink doctype="POS Invoice" name={r.invoice} iconOnly />
+      </span>
+    ),
+  },
   { key: 'item_total', header: 'Item Total', render: (r) => formatCurrency(r.item_total), align: 'right' },
   { key: 'total_taxes', header: 'Taxes', render: (r) => formatCurrency(r.total_taxes), align: 'right' },
   { key: 'grand_total', header: 'Grand Total', render: (r) => formatCurrency(r.grand_total), align: 'right' },
@@ -84,16 +95,11 @@ export function DaywiseInvoices() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Daywise Invoices</h1>
-          <p className="text-sm text-muted-foreground">
-            Invoice-level detail {activeBranchId === 'all' ? '· All Branches' : ''}
-            {pagination ? ` · ${pagination.total} invoices` : ''}
-          </p>
-        </div>
-        <DateRangeFilter value={range} onChange={setRange} />
-      </div>
+      <PageHeader
+        title="Daywise Invoices"
+        description={`Invoice-level detail ${activeBranchId === 'all' ? '· All Branches' : ''}${pagination ? ` · ${pagination.total} invoices` : ''}`}
+        actions={<DateRangeFilter value={range} onChange={setRange} />}
+      />
 
       {error && (
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -111,7 +117,6 @@ export function DaywiseInvoices() {
           <div className="flex gap-2">
             <Button
               variant="outline"
-              size="sm"
               disabled={page <= 1}
               onClick={() => setPage((p) => Math.max(1, p - 1))}
             >
@@ -119,7 +124,6 @@ export function DaywiseInvoices() {
             </Button>
             <Button
               variant="outline"
-              size="sm"
               disabled={page >= pagination.total_pages}
               onClick={() => setPage((p) => p + 1)}
             >

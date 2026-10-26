@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { call, formatCurrency } from '@ury/core';
-import { StatCard, DataTable, type DataTableColumn } from '@ury/ui';
-import { IndianRupee, TrendingUp, Trophy, TrendingDown } from 'lucide-react';
+import { KpiStrip, DataTable, type DataTableColumn, Select, PageHeader } from '@ury/ui';
 import { useBranchContext } from '../../context/BranchContext';
 import { BarChartCard } from '../../components/reports/charts/BarChartCard';
-import { SearchableSelect } from '../../components/common/SearchableSelect';
 
 interface MonthRow {
   year: number;
@@ -75,26 +73,22 @@ export function MonthWiseSales() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Month Wise Sales</h1>
-          <p className="text-sm text-muted-foreground">
-            Monthly revenue trend {activeBranchId === 'all' ? '· All Branches' : ''}
-          </p>
-        </div>
-        <div className="w-44">
-          <SearchableSelect
-            id="months-back"
-            value={String(monthsBack)}
-            onChange={(_, val) => setMonthsBack(Number(val))}
-            options={MONTH_OPTIONS.map((m) => ({
-              value: String(m),
-              label: `Last ${m} months`,
-            }))}
-            strict
-          />
-        </div>
-      </div>
+      <PageHeader
+        title="Month Wise Sales"
+        description={`Monthly revenue trend ${activeBranchId === 'all' ? '· All Branches' : ''}`}
+        actions={
+          <Select
+            value={monthsBack}
+            onChange={(e) => setMonthsBack(Number(e.target.value))}
+          >
+            {MONTH_OPTIONS.map((m) => (
+              <option key={m} value={m}>
+                Last {m} months
+              </option>
+            ))}
+          </Select>
+        }
+      />
 
       {error && (
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -103,27 +97,17 @@ export function MonthWiseSales() {
       )}
 
       {isLoading && !data ? (
-        <div className="text-sm text-muted-foreground">Loading...</div>
+        <div className="text-sm text-muted-foreground">Loading…</div>
       ) : data ? (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <StatCard
-              label="Total Revenue"
-              value={formatCurrency(data.summary.total_revenue)}
-              icon={<IndianRupee className="w-4 h-4" />}
-            />
-            <StatCard
-              label="Avg Monthly"
-              value={formatCurrency(data.summary.average_monthly_revenue)}
-              icon={<TrendingUp className="w-4 h-4" />}
-            />
-            <StatCard label="Best Month" value={data.summary.best_month ?? '—'} icon={<Trophy className="w-4 h-4" />} />
-            <StatCard
-              label="Weakest Month"
-              value={data.summary.worst_month ?? '—'}
-              icon={<TrendingDown className="w-4 h-4" />}
-            />
-          </div>
+          <KpiStrip
+            items={[
+              { label: 'Total Revenue', value: formatCurrency(data.summary.total_revenue) },
+              { label: 'Avg Monthly', value: formatCurrency(data.summary.average_monthly_revenue) },
+              { label: 'Best Month', value: data.summary.best_month ?? '—' },
+              { label: 'Weakest Month', value: data.summary.worst_month ?? '—' },
+            ]}
+          />
 
           <BarChartCard
             title="Monthly Grand Total"

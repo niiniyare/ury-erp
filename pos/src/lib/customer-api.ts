@@ -36,6 +36,7 @@ export interface CreateCustomerData {
   customer_group?: string;
   territory?: string;
   name?: string;
+  pos_profile?: string;
 }
 
 export interface CreateCustomerResponse {
@@ -79,6 +80,7 @@ export async function addCustomer(
     }
     return {
       data: {
+        name: msg.name,
         customer_name: msg.customer_name,
         mobile_number: msg.mobile_number,
         customer_group: msg.customer_group,
@@ -122,3 +124,48 @@ export async function searchCustomers(search: string, limit = 5) {
     throw error;
   }
 }
+
+export interface OrderTypeCustomer {
+  name: string;
+  customer_name: string;
+  mobile_number: string;
+  content: string;
+  is_order_type_match?: boolean;
+  order_type?: string | null;
+}
+
+export async function getCustomersByOrderType(
+  orderType?: string,
+  search?: string,
+  limit = 20
+): Promise<OrderTypeCustomer[]> {
+  try {
+    const response = await call.get('ury.ury_pos.api.get_customers_by_order_type', {
+      order_type: orderType || undefined,
+      search: search?.trim() || undefined,
+      limit,
+    });
+    const message = response?.message;
+    const data = message?.data ?? message;
+    if (Array.isArray(data)) {
+      return data.map((doc: any) => ({
+        name: doc.name || doc.customer,
+        customer_name: doc.customer_name ?? doc.name,
+        mobile_number: doc.mobile_number ?? '',
+        content:
+          doc.content ??
+          `Customer Name : ${doc.customer_name ?? ''} | Mobile Number : ${doc.mobile_number ?? ''}`,
+        is_order_type_match: doc.is_order_type_match ?? true,
+        order_type: doc.order_type ?? orderType ?? null,
+      }));
+    }
+    return [];
+  } catch (error) {
+    console.error('Error fetching customers by order type:', error);
+    if (search?.trim()) {
+      return searchCustomers(search, limit);
+    }
+    return [];
+  }
+}
+

@@ -4,6 +4,7 @@ import 'react-toastify/dist/ReactToastify.css';
 
 // Custom CSS for toast styling
 import './toast.css';
+import { sanitizeMessageHtml } from '../lib/sanitize-message';
 
 const toastIcons = {
   success: <CheckCircle className="w-5 h-5" />,
@@ -12,9 +13,25 @@ const toastIcons = {
   warning: <AlertTriangle className="w-5 h-5" />,
 };
 
+// Derive a toastId from message content to prevent duplicate toasts
+// Uses a simple hash to create a deterministic ID from the message string
+const getToastId = (message: string): string => {
+  let hash = 0;
+  for (let i = 0; i < message.length; i++) {
+    const char = message.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return `toast-${Math.abs(hash)}`;
+};
+
+const toastContent = (message: string) => (
+  <span dangerouslySetInnerHTML={{ __html: sanitizeMessageHtml(message) }} />
+);
+
 export const showToast = {
   success: (message: string) => {
-    toast.success(message, {
+    toast.success(toastContent(message), {
       position: 'top-right',
       autoClose: 2000,
       hideProgressBar: false,
@@ -25,10 +42,11 @@ export const showToast = {
       theme: 'colored',
       icon: toastIcons.success,
       className: 'toast-success',
+      toastId: getToastId(message),
     });
   },
   error: (message: string) => {
-    toast.error(message, {
+    toast.error(toastContent(message), {
       position: 'top-right',
       autoClose: 2000,
       hideProgressBar: false,
@@ -39,10 +57,11 @@ export const showToast = {
       theme: 'colored',
       icon: toastIcons.error,
       className: 'toast-error',
+      toastId: getToastId(message),
     });
   },
   warning: (message: string) => {
-    toast.warning(message, {
+    toast.warning(toastContent(message), {
       position: 'top-right',
       autoClose: 2000,
       hideProgressBar: false,
@@ -53,10 +72,11 @@ export const showToast = {
       theme: 'colored',
       icon: toastIcons.warning,
       className: 'toast-warning',
+      toastId: getToastId(message),
     });
   },
   info: (message: string) => {
-    toast.info(message, {
+    toast.info(toastContent(message), {
       position: 'top-right',
       autoClose: 2000,
       hideProgressBar: false,
@@ -67,6 +87,7 @@ export const showToast = {
       theme: 'colored',
       icon: toastIcons.info,
       className: 'toast-info',
+      toastId: getToastId(message),
     });
   },
 };
@@ -84,6 +105,7 @@ export const ToastProvider = () => {
       draggable
       pauseOnHover
       theme="colored"
+      limit={3}
     />
   );
 };

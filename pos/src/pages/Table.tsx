@@ -28,7 +28,6 @@ const TableView = () => {
   const { posProfile, setSelectedTable, setSelectedOrderType } = usePOSStore();
   const user = useRootStore((state) => state.user);
   const showCaptainTransfer = canCaptainTransfer(user, posProfile);
-  const isRestricted = isUserRestrictedFromTableOrders(user, posProfile);
 
   const branch = posProfile?.branch ?? null;
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -175,7 +174,7 @@ const TableView = () => {
 
     setSelectedOrderType(DINE_IN);
     setSelectedTable(tableName, selectedRoom);
-    navigate('/pos');
+    navigate('/register');
   };
 
   const handlePreviewTable = (table: Table, event?: MouseEvent<HTMLButtonElement>) => {
@@ -386,7 +385,6 @@ const TableView = () => {
       onPreview={(event) => handlePreviewTable(table, event)}
       onPrint={(event) => handlePrintTable(table, event)}
       isPrinting={printingTable === table.name}
-      isRestricted={isRestricted}
     />
     );
   };
@@ -433,7 +431,7 @@ const TableView = () => {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="p-4 bg-white border-b border-gray-200">
+      <div className="p-4 bg-white border-b border-border">
         <div className="max-w-screen-xl mx-auto">
           <div className="flex flex-col gap-3">
             <div className="flex justify-between items-start gap-4">
@@ -575,7 +573,7 @@ const TableView = () => {
       />
 
       {/* Status Legend */}
-      <div className="fixed bottom-[4.5rem] w-full p-4 bg-white border-t border-gray-200">
+      <div className="fixed bottom-[4.5rem] w-full p-4 bg-white border-t border-border">
         <div className="max-w-screen-xl mx-auto">
           <div className="flex items-center justify-center gap-6 text-sm">
             <div className="flex items-center gap-2">

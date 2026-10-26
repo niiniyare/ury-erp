@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { call, formatCurrency } from '@ury/core';
-import { StatCard, DataTable, type DataTableColumn, Button } from '@ury/ui';
-import { Ban, IndianRupee, Users, ChevronLeft, ChevronRight, AlertTriangle } from 'lucide-react';
+import { KpiStrip, type KpiItemProps, DataTable, type DataTableColumn, Button, PageHeader } from '@ury/ui';
+import { ChevronLeft, ChevronRight, AlertTriangle } from 'lucide-react';
 import { useBranchContext } from '../../context/BranchContext';
 import { DateRangeFilter, type DateRangeValue } from '../../components/reports/DateRangeFilter';
+import { DeskLink } from '../../components/DeskLink';
 import { toApiDate } from '../../lib/reportDate';
 import { startOfMonth, endOfDay } from 'date-fns';
 
@@ -71,7 +72,17 @@ export function CancelledInvoices() {
   const columns: DataTableColumn<CancelledInvoiceRow>[] = [
     { key: 'date', header: 'Date' },
     { key: 'time', header: 'Time' },
-    { key: 'invoice', header: 'Invoice' },
+    {
+      key: 'invoice',
+      header: 'Invoice',
+      render: (r) => (
+        <span className="inline-flex items-center gap-1.5">
+          {r.invoice}
+          {/* Link to editable desk document; this report is read-only */}
+          <DeskLink doctype="POS Invoice" name={r.invoice} iconOnly />
+        </span>
+      ),
+    },
     {
       key: 'amount',
       header: 'Amount',
@@ -91,15 +102,11 @@ export function CancelledInvoices() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Cancelled Invoices</h1>
-          <p className="text-sm text-muted-foreground">
-            Cancellation audit {activeBranchId === 'all' ? '· All Branches' : ''}
-          </p>
-        </div>
-        <DateRangeFilter value={range} onChange={setRange} />
-      </div>
+      <PageHeader
+        title="Cancelled Invoices"
+        description={`Cancellation audit ${activeBranchId === 'all' ? '· All Branches' : ''}`}
+        actions={<DateRangeFilter value={range} onChange={setRange} />}
+      />
 
       {error && (
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -108,19 +115,13 @@ export function CancelledInvoices() {
       )}
 
       {data && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <StatCard label="Total Cancelled" value={data.summary.total_count} icon={<Ban className="w-4 h-4" />} />
-          <StatCard
-            label="Total Amount"
-            value={formatCurrency(data.summary.total_amount)}
-            icon={<IndianRupee className="w-4 h-4" />}
-          />
-          <StatCard
-            label="Unique Cancellers"
-            value={data.summary.unique_cancellers}
-            icon={<Users className="w-4 h-4" />}
-          />
-        </div>
+        <KpiStrip
+          items={[
+            { label: 'Total Cancelled', value: data.summary.total_count },
+            { label: 'Total Amount', value: formatCurrency(data.summary.total_amount) },
+            { label: 'Unique Cancellers', value: data.summary.unique_cancellers },
+          ] satisfies KpiItemProps[]}
+        />
       )}
 
       <DataTable columns={columns} rows={data?.invoices ?? []} isLoading={isLoading} />
@@ -131,12 +132,11 @@ export function CancelledInvoices() {
             Page {pagination.page} of {pagination.total_pages}
           </span>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+            <Button variant="outline" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
               <ChevronLeft className="w-4 h-4" /> Prev
             </Button>
             <Button
               variant="outline"
-              size="sm"
               disabled={page >= pagination.total_pages}
               onClick={() => setPage((p) => p + 1)}
             >

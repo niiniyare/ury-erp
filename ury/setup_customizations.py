@@ -4,17 +4,56 @@ import click
 from frappe import _
 
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
-from ury.role_permissions import setup_role_permissions
 
 def after_install():
     create_custom_fields(get_custom_fields())
     add_roles_to_administrator()
-    setup_role_permissions()
+    hide_setup_sidebar_options()
+
+def hide_setup_sidebar_options():
+	"""Hide Access, Email, Data, and Integrations options from the Setup sidebar."""
+	items_to_hide = (
+		# Access
+		"Access",
+		"Role",
+		"Role Permissions",
+		"User Permissions",
+		"Authorization Rule",
+		# Email
+		"Email",
+		"Email Account",
+		"Email Template",
+		"Email Digest",
+		# Data
+		"Data",
+		"Data Import",
+		"Rename Tool",
+		"Bulk Transaction Log",
+		"Transaction Deletion Record",
+		# Integrations
+		"Integrations",
+		"Incoming Call Settings",
+		"Voice Call Settings",
+		"Call Log",
+		"Telephony Call Type",
+		"Communication Medium",
+		"Code List",
+		"Common Code",
+	)
+	frappe.db.sql(
+		"""
+		UPDATE `tabSidebar Item`
+		SET hidden = 1
+		WHERE parent = 'Setup' AND label IN %s
+		""",
+		(items_to_hide,),
+	)
+	frappe.clear_cache()
 
 def add_roles_to_administrator():
     try:
         user = frappe.get_doc("User", "Administrator")
-        user.add_roles("URY Cashier", "URY Manager", "URY Captain","URY Admin")
+        user.add_roles("URY Cashier", "URY Manager", "URY Captain")
     except Exception as e:
         frappe.log_error(f"Failed to add URY roles to Administrator: {e}", "URY Setup Error")
         
@@ -382,13 +421,32 @@ def get_custom_fields():
 				"fieldtype": "Column Break",
 				"insert_after": "restaurant",
 			},
-			{	
+			{
 				"fieldname": "branch",
 				"fieldtype": "Link",
 				"insert_after": "column_break_e3dky",
 				"label": "Branch",
 				"options": "Branch",
 				"reqd": 1
+			}
+		],
+
+		"POS Closing Entry": [
+			{
+				# Mirrors "POS Opening Entry-branch": stock_count_gate.py's
+				# validate_pos_closing_entry() needs doc.branch to resolve the
+				# per-branch "Stock Count Gate" Alert Rule. Standard POS Closing
+				# Entry has no branch field, which used to raise an
+				# AttributeError on any bench where this field was never
+				# created (see v3_19.add_pos_closing_entry_branch_field patch).
+				"fieldname": "branch",
+				"fieldtype": "Link",
+				"insert_after": "pos_opening_entry",
+				"label": "Branch",
+				"options": "Branch",
+				"fetch_from": "pos_profile.branch",
+				"fetch_if_empty": 1,
+				"read_only": 1,
 			}
 		],
 
@@ -420,11 +478,11 @@ def get_custom_fields():
 				"label": "Mobile Number",
 				"insert_after": "customer_name",
 				"translatable": 0,
-				"reqd": 1
+				"reqd": 0
 			},
 		],
 
-		"POS Invoice Item": [
+		"POS Invoice Iten": [
 			{
 				"fieldname": "comment",
 				"fieldtype": "Data",
@@ -443,7 +501,211 @@ def get_custom_fields():
 				"read_only": 1,
 			},
 		],
-     
+		"Stock Entry": [
+			{
+				"fieldname": "branch",
+				"fieldtype": "Link",
+				"label": "Branch",
+				"options": "Branch",
+				"insert_after": "company",
+			},
+			{
+				"fieldname": "custom_ury_posting_intent",
+				"fieldtype": "Data",
+				"label": "URY Posting Intent",
+				"insert_after": "remarks",
+				"read_only": 1,
+				"search_index": 1,
+				"translatable": 0,
+			},
+			{
+				"fieldname": "custom_ury_batch_request",
+				"fieldtype": "Data",
+				"label": "URY Batch Request",
+				"description": "Idempotency key for a Start Batch/Receive Batch request posted by ury_batch_manufacture_service.py. Indexed for exact-match FOR UPDATE dedupe lookups, same pattern as custom_ury_posting_intent.",
+				"insert_after": "custom_ury_posting_intent",
+				"read_only": 1,
+				"search_index": 1,
+				"translatable": 0,
+			},
+		],
+
+		"Production Plan": [
+			# Main tab -- compact 2-column URY identity section after company.
+			# Do NOT put a Tab Break here: that would pull po_items / mr_items
+			# onto the URY tab. The URY tab is appended after amended_from.
+			{
+				"fieldname": "custom_ury_section",
+				"fieldtype": "Section Break",
+				"label": "URY",
+				"insert_after": "company",
+				"collapsible": 1,
+			},
+			{
+				"fieldname": "custom_ury_sales_plan",
+				"fieldtype": "Link",
+				"options": "URY Sales Plan",
+				"label": "URY Sales Plan",
+				"description": "Reverse link to the URY Sales Plan this Production Plan was created from. Source of truth for open-or-create.",
+				"insert_after": "custom_ury_section",
+				"read_only": 1,
+				"allow_on_submit": 1,
+				"search_index": 1,
+			},
+			{
+				"fieldname": "custom_ury_department",
+				"fieldtype": "Link",
+				"options": "URY Production Department",
+				"label": "URY Production Department",
+				"description": "The plan's one department (Wave 0 / one-Production-Plan-per-department).",
+				"insert_after": "custom_ury_sales_plan",
+				"read_only": 1,
+			},
+			{
+				"fieldname": "custom_ury_column_break",
+				"fieldtype": "Column Break",
+				"insert_after": "custom_ury_department",
+			},
+			{
+				"fieldname": "custom_ury_department_warehouse",
+				"fieldtype": "Link",
+				"options": "Warehouse",
+				"label": "URY Department Warehouse",
+				"description": "The plan's one Department Warehouse. Source and target for the Store-to-Department transfer, and the fg_warehouse for this plan's Work Orders (D13).",
+				"insert_after": "custom_ury_column_break",
+				"read_only": 1,
+			},
+			{
+				"fieldname": "custom_ury_production_state",
+				"fieldtype": "Select",
+				"options": "\nAwaiting Materials\nReady for Production\nProcessing\nProduction Completed\nProduction Failed",
+				"label": "URY Production State",
+				"description": "How far this department's execution has got. Distinct from whether the plan is still current against its Sales Plan snapshot (D12).",
+				"insert_after": "custom_ury_department_warehouse",
+				"read_only": 1,
+			},
+			{
+				"fieldname": "custom_ury_production_started_at",
+				"fieldtype": "Datetime",
+				"label": "URY Production Started At",
+				"description": "When the current or most recent Prepare Production attempt started.",
+				"insert_after": "custom_ury_production_state",
+				"read_only": 1,
+			},
+			# URY tab -- after the last ERPNext field so assembly / MR tables stay
+			# on the main tab. Sections + columns instead of a single stack.
+			{
+				"fieldname": "custom_ury_tab",
+				"fieldtype": "Tab Break",
+				"label": "URY",
+				"insert_after": "amended_from",
+			},
+			{
+				"fieldname": "custom_ury_snapshot_section",
+				"fieldtype": "Section Break",
+				"label": "Sales Plan Snapshot",
+				"insert_after": "custom_ury_tab",
+			},
+			{
+				"fieldname": "custom_ury_snapshot_hash",
+				"fieldtype": "Data",
+				"label": "Sales Plan Snapshot Hash",
+				"description": "Approval snapshot hash of the Sales Plan at creation; a mismatch means the Sales Plan changed since.",
+				"insert_after": "custom_ury_snapshot_section",
+				"read_only": 1,
+				"allow_on_submit": 1,
+			},
+			{
+				"fieldname": "custom_ury_result_section",
+				"fieldtype": "Section Break",
+				"label": "Prepare Result",
+				"insert_after": "custom_ury_snapshot_hash",
+			},
+			{
+				"fieldname": "custom_ury_production_result",
+				"fieldtype": "Long Text",
+				"label": "URY Production Result",
+				"description": "JSON: blockers, generated documents, and timings from the most recent Prepare Production attempt.",
+				"insert_after": "custom_ury_result_section",
+				"read_only": 1,
+			},
+			{
+				"fieldname": "custom_ury_execution_section",
+				"fieldtype": "Section Break",
+				"label": "Job Execution",
+				"insert_after": "custom_ury_production_result",
+			},
+			{
+				"fieldname": "custom_ury_execution_job_id",
+				"fieldtype": "Data",
+				"label": "URY Execution Job ID",
+				"description": "The background (RQ) job handle for the current or most recent execution attempt (D17).",
+				"insert_after": "custom_ury_execution_section",
+				"read_only": 1,
+			},
+			{
+				"fieldname": "custom_ury_execution_attempt",
+				"fieldtype": "Int",
+				"label": "URY Execution Attempt",
+				"description": "Incremented per execution attempt; written onto the documents that attempt generates (D17).",
+				"insert_after": "custom_ury_execution_job_id",
+				"read_only": 1,
+			},
+			{
+				"fieldname": "custom_ury_execution_column",
+				"fieldtype": "Column Break",
+				"insert_after": "custom_ury_execution_attempt",
+			},
+			{
+				"fieldname": "custom_ury_execution_heartbeat",
+				"fieldtype": "Datetime",
+				"label": "URY Execution Heartbeat",
+				"description": "Updated by the running job as it progresses. Used with production_job_stale_minutes to decide whether an attempt is recoverable (D17).",
+				"insert_after": "custom_ury_execution_column",
+				"read_only": 1,
+			},
+			{
+				"fieldname": "custom_ury_execution_step",
+				"fieldtype": "Data",
+				"label": "URY Execution Step",
+				"description": "The current step of the running or most recent execution attempt, for the UI and for diagnosis (D17).",
+				"insert_after": "custom_ury_execution_heartbeat",
+				"read_only": 1,
+			},
+		],
+
+		"Production Plan Item": [
+			{
+				"fieldname": "custom_ury_no_work_order",
+				"fieldtype": "Check",
+				"label": "URY No Work Order",
+				"description": (
+					"Advisory marker for a MADE_TO_ORDER row's own target: this row exists so "
+					"ERPNext's mandatory po_items constraint is satisfied, but must never get a "
+					"Work Order -- an MTO item is produced only from the actual order, never in "
+					"advance. The executor already skips it; ury_work_order_hooks is the actual "
+					"server-side guard, refusing any Work Order linked to a Production Plan Item "
+					"row with this flag set, regardless of who tries to create one."
+				),
+				"insert_after": "warehouse",
+				"read_only": 1,
+			},
+		],
+
+		"URY Sales Plan": [
+			{
+				"fieldname": "custom_ury_production_plan",
+				"fieldtype": "Link",
+				"options": "Production Plan",
+				"label": "Production Plan",
+				"description": "Deprecated (D11): a Sales Plan now creates one Production Plan per department, so this single-value link can no longer be the source of truth. Hidden; kept for compatibility rather than deleted. Was populated by ury.ury.api.ury_sales_plan_auto_production_plan.",
+				"insert_after": "status",
+				"read_only": 1,
+				"no_copy": 1,
+				"hidden": 1,
+			},
+		],
+
     }
  
 def delete_custom_fields(custom_fields):

@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useBranchContext } from '../../context/BranchContext';
 import { Users, Plus, ShieldCheck, Edit2 } from 'lucide-react';
-import { Card, Button, Badge, Input, Spinner, showToast } from '@ury/ui';
-import { SearchableSelect } from '../../components/common/SearchableSelect';
+import { Card, Button, Badge, Input, Spinner, showToast, DataTable, type DataTableColumn, messageToPlainText } from '@ury/ui';
 import { Switch } from '../../components/ui/switch';
 import { dashboardService } from '../../services/dashboard';
 import { call } from '@ury/core';
 import SideDrawer from '../../components/layout/SideDrawer';
+import MultiSelect from '../../components/common/MultiSelect';
 
 interface UserRecord {
   name: string;
@@ -19,6 +19,8 @@ interface UserRecord {
   roles?: Array<{ role: string }>;
 }
 
+
+
 export const UserPage: React.FC = () => {
   const { activeBranchId } = useBranchContext();
   const [users, setUsers] = useState<UserRecord[]>([]);
@@ -27,11 +29,17 @@ export const UserPage: React.FC = () => {
   const [editingUser, setEditingUser] = useState<UserRecord | null>(null);
   const [saving, setSaving] = useState<boolean>(false);
 
-  const [newUser, setNewUser] = useState({
+  const [newUser, setNewUser] = useState<{
+    first_name: string;
+    last_name: string;
+    email: string;
+    roles: string[];
+    enabled: boolean;
+  }>({
     first_name: '',
     last_name: '',
     email: '',
-    role: 'URY Cashier',
+    roles: ['URY Cashier'],
     enabled: true,
   });
   const [originalUser, setOriginalUser] = useState<any>(null);
@@ -39,7 +47,7 @@ export const UserPage: React.FC = () => {
 
   const fetchRoles = async () => {
     try {
-      const res = await call<any>('frappe.client.get_list', { doctype: 'Role', fields: ['name'], limit: 1000 });
+      const res = await call<any>('frappe.client.get_list', { doctype: 'Role', fields: ['name'], limit_page_length: 1000 });
       const records = res.message || res;
       setAllRoles(Array.isArray(records) ? records : []);
     } catch (err) {
@@ -48,12 +56,31 @@ export const UserPage: React.FC = () => {
     }
   };
 
-  const URY_ROLES = ['URY Manager', 'URY Waiter', 'URY Cashier'];
-
   const fetchUsers = async () => {
     setLoading(true);
     try {
       const records = await dashboardService.getModuleRecords<UserRecord>('User', activeBranchId);
+      
+      const userNames = records.map(r => r.name);
+      if (userNames.length > 0) {
+        try {
+          const rolesRes = await call<any>('frappe.client.get_list', {
+            doctype: 'Has Role',
+            filters: [['parenttype', '=', 'User'], ['parent', 'in', userNames]],
+            fields: ['parent', 'role'],
+            limit_page_length: 5000
+          });
+          const hasRoles = Array.isArray(rolesRes.message) ? rolesRes.message : (Array.isArray(rolesRes) ? rolesRes : []);
+          records.forEach(user => {
+            user.roles = hasRoles
+              .filter((hr: any) => hr.parent === user.name)
+              .map((hr: any) => ({ role: hr.role }));
+          });
+        } catch (e) {
+          console.error('Failed to fetch user roles for list', e);
+        }
+      }
+
       setUsers(records);
     } catch {
       setUsers([]);
@@ -67,22 +94,23 @@ export const UserPage: React.FC = () => {
     fetchRoles();
   }, [activeBranchId]);
 
-  const getDisplayRole = (user: UserRecord): string => {
+  const getDisplayRoles = (user: UserRecord): string[] => {
     if (user.roles && Array.isArray(user.roles) && user.roles.length > 0) {
-      return user.roles[0].role;
+      const uryRole = user.roles.find(r => r.role.startsWith('URY '));
+      return [uryRole ? uryRole.role : user.roles[0].role];
     }
-    return 'User';
+    return ['User'];
   };
 
   const openAddDrawer = () => {
     setEditingUser(null);
-    setNewUser({ first_name: '', last_name: '', email: '', role: 'URY Cashier', enabled: true });
+    setNewUser({ first_name: '', last_name: '', email: '', roles: ['URY Cashier'], enabled: true });
     setIsDrawerOpen(true);
   };
 
   const openEditDrawer = async (user: UserRecord) => {
     setEditingUser(user);
-    let userRole = 'URY Cashier';
+    let userRoles: string[] = [];
 
     try {
       const fullUserRes = await call('frappe.client.get', {
@@ -91,22 +119,22 @@ export const UserPage: React.FC = () => {
       });
       const fullUser = (fullUserRes as any).message || fullUserRes;
 
-      if (fullUser.roles && Array.isArray(fullUser.roles) && fullUser.roles.length > 0) {
-        userRole = fullUser.roles[0].role;
+      if (fullUser.roles && Array.isArray(fullUser.roles)) {
+        userRoles = fullUser.roles.map((r: any) => r.role);
       }
     } catch (err) {
       console.error('Failed to fetch user roles', err);
     }
-    
-    if (userRole === 'URY Cashier' && user.roles && Array.isArray(user.roles) && user.roles.length > 0) {
-      userRole = user.roles[0].role;
+
+    if (userRoles.length === 0) {
+      userRoles = ['URY Cashier'];
     }
 
     const initialForm = {
       first_name: user.first_name || '',
       last_name: user.last_name || '',
       email: user.email || '',
-      role: userRole,
+      roles: userRoles,
       enabled: user.enabled === 1,
     };
     setNewUser(initialForm);
@@ -118,17 +146,22 @@ export const UserPage: React.FC = () => {
     e.preventDefault();
     if (!newUser.email) return;
 
+    if (newUser.roles.length === 0) {
+      showToast.warning('Please select at least one role for the user');
+      return;
+    }
+
     if (editingUser && originalUser) {
       const original = {
         first_name: (originalUser.first_name || '').trim(),
         last_name: (originalUser.last_name || '').trim(),
-        role: originalUser.role,
+        roles: [...originalUser.roles].sort(),
         enabled: originalUser.enabled ? 1 : 0,
       };
       const current = {
         first_name: (newUser.first_name || '').trim(),
         last_name: (newUser.last_name || '').trim(),
-        role: newUser.role,
+        roles: [...newUser.roles].sort(),
         enabled: newUser.enabled ? 1 : 0,
       };
       if (JSON.stringify(original) === JSON.stringify(current)) {
@@ -150,23 +183,14 @@ export const UserPage: React.FC = () => {
           },
         });
 
-        if (newUser.role) {
-          const fullUserRes = await call('frappe.client.get', {
-            doctype: 'User',
-            name: editingUser.name,
-          });
-          const fullUser = (fullUserRes as any).message || fullUserRes;
+        const updatedRoles = newUser.roles.map((r) => ({ role: r }));
 
-          let updatedRoles = fullUser.roles && Array.isArray(fullUser.roles) ? [...fullUser.roles] : [];
-          updatedRoles = [{ role: newUser.role }];
-
-          await call('frappe.client.set_value', {
-            doctype: 'User',
-            name: editingUser.name,
-            fieldname: 'roles',
-            value: updatedRoles,
-          });
-        }
+        await call('frappe.client.set_value', {
+          doctype: 'User',
+          name: editingUser.name,
+          fieldname: 'roles',
+          value: updatedRoles,
+        });
       } else {
         await call('frappe.client.insert', {
           doc: {
@@ -176,7 +200,7 @@ export const UserPage: React.FC = () => {
             last_name: newUser.last_name,
             send_welcome_email: 1,
             enabled: newUser.enabled ? 1 : 0,
-            roles: [{ role: newUser.role }],
+            roles: newUser.roles.map((r) => ({ role: r })),
           },
         });
       }
@@ -192,7 +216,7 @@ export const UserPage: React.FC = () => {
           if (messages.length > 0) {
             const lastMessage = JSON.parse(messages[messages.length - 1]);
             if (lastMessage.message) {
-              errorMessage = lastMessage.message.replace(/<[^>]*>?/gm, '');
+              errorMessage = messageToPlainText(lastMessage.message);
             }
           }
         } catch (e) {}
@@ -242,48 +266,56 @@ export const UserPage: React.FC = () => {
           </Button>
         </Card>
       ) : (
-        <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
-          <table className="w-full text-left text-sm text-gray-600">
-            <thead className="bg-gray-50 border-b border-gray-100 text-xs uppercase text-gray-500 font-semibold">
-              <tr>
-                <th className="px-6 py-4">User</th>
-                <th className="px-6 py-4">User ID</th>
-                <th className="px-6 py-4">Role</th>
-                <th className="px-6 py-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {users.map((user) => (
-                <tr key={user.name} className="hover:bg-primary/10 transition-colors">
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-xs uppercase shrink-0">
-                        {(user.first_name || user.email || user.name || '?').charAt(0)}
+        <>
+          {users.length > 0 && (
+            <>
+              {(() => {
+                const columns: DataTableColumn<UserRecord>[] = [
+                  {
+                    key: 'name',
+                    header: 'User',
+                    render: (row) => (
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-xs uppercase shrink-0">
+                          {(row.first_name || row.email || row.name || '?').charAt(0)}
+                        </div>
+                        <div className="font-semibold text-gray-900">
+                          {row.first_name || row.full_name || row.name}
+                        </div>
                       </div>
-                      <div className="font-semibold text-gray-900">
-                        {user.first_name || user.full_name || user.name}
+                    )
+                  },
+                  { key: 'email', header: 'User ID', render: (row) => <span className="text-gray-600 font-medium">{row.email}</span> },
+                  {
+                    key: 'role',
+                    header: 'Roles',
+                    render: (row) => (
+                      <div className="flex flex-wrap gap-1">
+                        {getDisplayRoles(row).map((r) => (
+                          <Badge key={r} variant="outline" className="border-primary/20 bg-primary/10 text-primary text-[10px]">
+                            <ShieldCheck className="w-3 h-3 mr-1" />
+                            {r}
+                          </Badge>
+                        ))}
                       </div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 text-gray-600 font-medium">
-                    {user.email}
-                  </td>
-                  <td className="px-6 py-4">
-                    <Badge variant="outline" className="border-primary/20 bg-primary/10 text-primary text-[10px]">
-                      <ShieldCheck className="w-3 h-3 mr-1" />
-                      {getDisplayRole(user)}
-                    </Badge>
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    <Button variant="ghost" size="sm" onClick={() => openEditDrawer(user)} className="text-gray-500 hover:text-primary">
-                      <Edit2 className="w-4 h-4" />
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                    )
+                  },
+                  {
+                    key: 'actions',
+                    header: 'Actions',
+                    align: 'right',
+                    render: (row) => (
+                      <Button variant="ghost" onClick={() => openEditDrawer(row)} className="text-gray-500 hover:text-primary">
+                        <Edit2 className="w-4 h-4" />
+                      </Button>
+                    )
+                  },
+                ];
+                return <DataTable columns={columns} rows={users} />;
+              })()}
+            </>
+          )}
+        </>
       )}
 
       {/* Add/Edit SideDrawer */}
@@ -323,21 +355,25 @@ export const UserPage: React.FC = () => {
           </div>
 
           <div>
-            <label className="block font-semibold text-gray-700 mb-1.5">Role</label>
-            <SearchableSelect
-              id="role"
-              value={newUser.role}
-              onChange={(_, value) => setNewUser({ ...newUser, role: value })}
-              options={
-                allRoles.length > 0 
-                  ? allRoles.map(r => ({ value: r.name, label: r.name }))
-                  : [
-                      { value: 'URY Cashier', label: 'URY Cashier' },
-                      { value: 'URY Waiter', label: 'URY Waiter' },
-                      { value: 'URY Manager', label: 'URY Manager' },
-                    ]
-              }
+            <label className="block font-semibold text-gray-700 mb-1.5">Roles / Access Level</label>
+            <MultiSelect
+              id="user-roles"
+              values={newUser.roles}
+              options={allRoles.map(r => ({ value: r.name, label: r.name }))}
+              placeholder="Select roles..."
+              onChange={(selectedRoles) => setNewUser({ ...newUser, roles: selectedRoles })}
             />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Switch
+              id="user-enabled"
+              checked={newUser.enabled}
+              onCheckedChange={(checked) => setNewUser({ ...newUser, enabled: checked })}
+            />
+            <label htmlFor="user-enabled" className="font-semibold text-gray-700 cursor-pointer">
+              Enabled (Active User)
+            </label>
           </div>
 
           <div className="pt-6 flex justify-end gap-3 border-t mt-4 border-gray-100">

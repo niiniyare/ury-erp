@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { call } from '@ury/core';
+import { useCompanyContext } from './CompanyContext';
+import { readTabScoped, writeTabScoped } from '../lib/tabScopedStorage';
 
 export interface Branch {
   id: string;
@@ -7,6 +9,8 @@ export interface Branch {
   code?: string;
   is_active?: boolean;
   address?: string;
+  /** Owning company (via its URY Restaurant); drives currency in "All companies". */
+  company?: string | null;
 }
 
 export interface BranchFilterContext {
@@ -29,14 +33,39 @@ export interface BranchContextType {
   refreshDashboard: () => void;
 }
 
-
+const BRANCH_STORAGE_KEY = 'ury_active_branch_id';
 
 const BranchContext = createContext<BranchContextType | undefined>(undefined);
 
+/** Pick a concrete working branch when nothing valid is selected yet. */
+export function resolveActiveBranchId(
+  fetched: Branch[],
+  currentId: string | null | undefined,
+): string {
+  if (fetched.some((b) => b.id === currentId)) {
+    return currentId as string;
+  }
+  // Explicit "All Branches" only stays when there are multiple branches to aggregate.
+  if (currentId === 'all' && fetched.length > 1) {
+    return 'all';
+  }
+  if (fetched.length >= 1) {
+    return fetched[0].id;
+  }
+  return 'all';
+}
+
+function readStoredBranchId(): string {
+  return readTabScoped(BRANCH_STORAGE_KEY);
+}
+
+function writeStoredBranchId(id: string) {
+  writeTabScoped(BRANCH_STORAGE_KEY, id);
+}
+
 export const BranchProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [activeBranchId, setActiveBranchIdState] = useState<string>(() => {
-    return localStorage.getItem('ury_active_branch_id') || 'all';
-  });
+  const { activeCompanyId } = useCompanyContext();
+  const [activeBranchId, setActiveBranchIdState] = useState<string>(readStoredBranchId);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -45,7 +74,7 @@ export const BranchProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const setActiveBranchId = (id: string) => {
     setActiveBranchIdState(id);
-    localStorage.setItem('ury_active_branch_id', id);
+    writeStoredBranchId(id);
   };
 
   const refreshDashboard = () => {
@@ -56,11 +85,24 @@ export const BranchProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const fetchBranches = async () => {
       setIsLoading(true);
       try {
-        const res = await call<any>('ury.ury.api.minimal.business_setup.get_branches');
+        const res = await call<any>('ury.ury.api.minimal.business_setup.get_branches', {
+          company: activeCompanyId === 'all' ? undefined : activeCompanyId
+        });
+        let fetched: Branch[] = [];
         if (res && Array.isArray(res)) {
-          setBranches(res);
+          fetched = res;
         } else if (res?.message && Array.isArray(res.message)) {
-          setBranches(res.message);
+          fetched = res.message;
+        }
+        setBranches(fetched);
+
+        const stored = readStoredBranchId();
+        const resolved = resolveActiveBranchId(fetched, stored || activeBranchId);
+        if (resolved !== activeBranchId) {
+          setActiveBranchId(resolved);
+        } else if (resolved && !stored) {
+          // Persist the resolved default so reloads keep a concrete branch.
+          writeStoredBranchId(resolved);
         }
       } catch {
         // Handle error without fallback
@@ -69,7 +111,7 @@ export const BranchProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
     };
     fetchBranches();
-  }, []);
+  }, [activeCompanyId]);
 
   const activeBranch = activeBranchId === 'all'
     ? null

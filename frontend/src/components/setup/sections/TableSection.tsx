@@ -76,10 +76,11 @@ function TableRow({ table, renameTable, updateTableSeats, deleteTable, canDelete
       {canDelete && (
         <Button
           type="button"
-          variant="ghost"
+          variant="danger"
+          size="icon"
           onClick={() => deleteTable(table.id)}
           aria-label="Delete table"
-          className="text-red-500 hover:text-red-700 hover:bg-red-50 self-end md:self-center shrink-0 p-2 h-auto"
+          className="text-destructive hover:text-destructive hover:bg-destructive-tint self-end md:self-center shrink-0 p-2 h-auto"
         >
           <Trash2 className="w-4 h-4" />
         </Button>
@@ -165,7 +166,7 @@ function RoomGroup({
               placeholder="Seats"
               className="w-20 text-sm bg-background"
             />
-            <Button type="button" variant="outline" size="sm" onClick={applyBulkSeats}>
+            <Button type="button" variant="outline" onClick={applyBulkSeats}>
               Set seats for all
             </Button>
           </div>

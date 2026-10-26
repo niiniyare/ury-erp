@@ -39,7 +39,8 @@
   "customer_group",
   "table_takeaway",
   "user",
-  "amended_from"
+  "amended_from",
+  "validation_dedup_key"
  ],
  "fields": [
   {
@@ -136,7 +137,7 @@
   {
    "allow_on_submit": 1,
    "fieldname": "start_time_serv",
-   "fieldtype": "Data",
+   "fieldtype": "Time",
    "label": "Served Time",
    "read_only": 1
   },
@@ -253,12 +254,22 @@
    "fieldtype": "Data",
    "label": "Total Production Time",
    "read_only": 1
+  },
+  {
+   "description": "Set only by the scheduled kotValidationThread fallback (ury_kot_validation.py) as \"<invoice>::<production>\". Left unset (NULL) by the live kot_execute writer path, so it never collides with normal order/modification KOTs. Its uniqueness stops the scheduler's own check-then-insert race (the same not-yet-submitted invoice can be re-selected across overlapping cron ticks) from creating more than one fallback \"Duplicate\" KOT for the same invoice+production.",
+   "fieldname": "validation_dedup_key",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Validation Dedup Key",
+   "no_copy": 1,
+   "read_only": 1,
+   "unique": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-09-02 19:28:17.139894",
+ "modified": "2026-10-21 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "URY",
  "name": "URY KOT",
@@ -318,24 +329,8 @@
    "share": 1,
    "submit": 1,
    "write": 1
-  },
-  {
-   "cancel": 1,
-   "create": 1,
-   "delete": 1,
-   "email": 1,
-   "export": 1,
-   "print": 1,
-   "read": 1,
-   "report": 1,
-   "role": "URY Admin",
-   "select": 1,
-   "share": 1,
-   "submit": 1,
-   "write": 1
   }
  ],
- "row_format": "Dynamic",
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": []

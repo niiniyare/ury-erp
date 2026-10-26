@@ -4,36 +4,16 @@ authors = [
     { name = "Tridz Technologies", email = "info@tridz.com"}
 ]
 description = "A Complete Restaurant Order Taking Software"
-requires-python = ">=3.10,<3.15"
+requires-python = ">=3.10"
 readme = "README.md"
 dynamic = ["version"]
 dependencies = [
     # "frappe~=15.0.0" # Installed and managed by bench.
-    # Real third-party packages the app itself imports (previously undeclared
-    # anywhere; versions intentionally unpinned so they resolve against
-    # whatever frappe itself already pins).
-    "click",
-    "cryptography",
-    "python-dateutil",
-    "pypdf",
-    "pytz",
-    "requests",
 ]
-
-[project.optional-dependencies]
-# Only needed if URY Printer Settings is configured to print via CUPS
-# (ury/ury/api/ury_print.py); requires the system "cups" dev package too.
-cups-printing = ["pycups"]
 
 [build-system]
 requires = ["flit_core >=3.4,<4"]
 build-backend = "flit_core.buildapi"
-
-[tool.bench.frappe-dependencies]
-# NOTE: intentionally left at the v15 range. Do not widen to include v16
-# until the Phase 2-5 fixes in the v16 remediation plan are verified on a
-# real v16 bench — see https://claude.ai/artifact/6baV3JuVYsgZ1w8UYvJKeY
-frappe = ">=15.0.0,<16.0.0"
 
 # These dependencies are only installed when developer mode is enabled
 [tool.bench.dev-dependencies]

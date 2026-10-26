@@ -20,18 +20,22 @@ const inputVariants = cva(
       variant: {
         default: "border-gray-200 hover:border-gray-300 focus-visible:border-primary",
         error:
-          "border-red-300 hover:border-red-400 focus-visible:border-red-500 focus-visible:ring-red-500",
+          "border-destructive/40 hover:border-destructive/60 focus-visible:border-destructive focus-visible:ring-destructive",
         success:
-          "border-green-300 hover:border-green-400 focus-visible:border-green-500 focus-visible:ring-green-500",
+          "border-success-300 hover:border-success-400 focus-visible:border-success-500 focus-visible:ring-success-500",
         search:
           "border-gray-200 bg-gray-50 shadow-none hover:border-gray-300 focus-visible:border-primary focus-visible:bg-background",
       },
-      // Shared control height scale — sm 36 / default 44 / lg 48 — so an Input
-      // sits flush with the Button or Select beside it.
+      // Shared control height scale. `default` is the dashboard chrome size
+      // (same metrics as Button/Select/DatePicker). `sm` is the same 36px box
+      // with text-xs. `compact` is for DataTable / EditableDataTable cells so
+      // editable rows match Menu list row height. `compactLg` aliases `default`.
       size: {
-        default: "h-11 px-3.5 py-2",
+        default: "h-9 px-3.5 py-1.5 text-[13px] rounded-[7px]",
         sm: "h-9 px-3 py-1.5 text-xs",
+        compact: "h-7 px-2 py-0.5 text-[12.5px] rounded-md shadow-none",
         lg: "h-12 px-4 py-3 text-base",
+        compactLg: "h-9 px-3.5 py-1.5 text-[13px] rounded-[7px]",
       },
     },
     defaultVariants: {

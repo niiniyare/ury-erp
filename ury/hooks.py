@@ -8,7 +8,7 @@ app_email = "info@tridz.com"
 app_license = "MIT"
 app_logo_url = "/assets/ury/Images/ury-logo.jpg"
 app_icon_title = "URY"
-required_apps = ["erpnext", "hrms"]
+required_apps = ["erpnext"]
 # Includes in <head>
 # ------------------
 add_to_apps_screen = [
@@ -27,7 +27,18 @@ app_include_js = [
     "/assets/ury/js/quick_entry.js",
     "/assets/ury/js/pos_print.js",
     "/assets/ury/js/restrict_qty_edit_pos.js",
-    "/assets/ury/js/ury_pos_kot.js"
+    "/assets/ury/js/ury_pos_kot.js",
+    # Floating "Back to <App>" chip for users a URY SPA sent into the desk.
+    # See ury/public/js/return_to_app.js and packages/core/src/frappe/deskLink.ts.
+    "/assets/ury/js/return_to_app.js",
+    # Keep only the current section of the URY sidebar open.
+    "/assets/ury/js/sidebar_focus_section.js",
+    "/assets/ury/js/remove_duplicates.js",
+    "/assets/ury/js/journal_entry.js",
+    "/assets/ury/js/round_off_limit_exceed.js",
+    "/assets/ury/js/restrict_customer_group_change.js",
+    "/assets/ury/js/ury_order_checklist.js",
+    "/assets/ury/js/autofetch_fields.js",
 ]
 
 # include js, css files in header of web template
@@ -45,7 +56,13 @@ app_include_js = [
 page_js = {"point-of-sale": ["public/js/pos_extend.js"]}
 
 # include js in doctype views
-# doctype_js = {"POS Invoive" : "public/js/pos_print.js"}
+doctype_js = {
+    "POS Closing Entry": "ury/public/js/pos_closing_entry.js",
+    "Production Plan": [
+        "public/js/production_plan_cancel_guard.js",
+        "public/js/production_plan_prepare.js",
+    ],
+}
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
@@ -55,10 +72,24 @@ website_context = {"splash_image": "/assets/ury/Images/ury-logo.jpg"}
 
 website_route_rules = [
     {"from_route": "/urypos/<path:app_path>", "to_route": "urypos"},
+    # /order kept as a redirect-compatible alias below; /ury/order is the
+    # canonical route going forward (new app, no live QR codes/bookmarks
+    # to break). Established routes (urypos, pos, mosaic) are intentionally
+    # NOT renamed here -- that would risk breaking printed QR codes or
+    # staff muscle memory on a system that may already be in real use;
+    # renaming those needs its own deliberate, communicated migration.
+    {"from_route": "/order/<path:app_path>", "to_route": "order"},
+    {"from_route": "/ury/order/<path:app_path>", "to_route": "order"},
     {"from_route": "/mosaic/<path:app_path>", "to_route": "mosaic"},
+    # Staff Serve PWA — must precede the generic /ury/<path> catchall.
+    # Exact + trailing-slash + nested SPA paths; SW is a more-specific rule
+    # so /ury/serve/sw.js is not swallowed by the SPA page.
+    {"from_route": "/ury/serve/sw.js", "to_route": "serve-sw.js"},
+    {"from_route": "/ury/serve", "to_route": "serve"},
+    {"from_route": "/ury/serve/", "to_route": "serve"},
+    {"from_route": "/ury/serve/<path:app_path>", "to_route": "serve"},
     {"from_route": "/ury/<path:app_path>", "to_route": "ury"},
     {"from_route": "/setup-wizard", "to_route": "ury"},
-    {"from_route": "/order/<path:app_path>", "to_route": "order"},
     {"from_route": "/pos/<path:app_path>", "to_route": "pos"},
 ]
 
@@ -68,6 +99,11 @@ setup_wizard_requires = [
 ]
 
 setup_wizard_stages = "ury.setup.setup_wizard.get_setup_stages"
+
+# Frappe reports a failed background setup only over the realtime socket.
+# Record it server-side as well so the wizard can report the failure over
+# HTTP when the socket is unreachable (see get_setup_progress_status).
+setup_wizard_exception = "ury.ury.api.minimal.setup_organization.record_setup_failure"
 
 ury_demo_master_doctypes = [
     "Gender",
@@ -88,9 +124,12 @@ ury_demo_master_doctypes = [
     "URY Restaurant",
     "URY Table",
     "Product Bundle",
+    "POS Profile",
+    "URY Production Department",
     "URY Production Unit",
+    "URY Item Production Configuration",
+    "URY Branch Stock Policy",
     "URY Report Settings",
-    "POS Profile"
 ]
 
 ury_demo_transaction_doctypes = [
@@ -131,6 +170,11 @@ ury_demo_transaction_doctypes = [
 # ------------
 
 # before_install = "ury.install.before_install"
+# Required, not optional: frappe's installer marks every patch an app ships as
+# already-completed at install time without running it, and URY's entire role
+# permission model lives in patches -- so without this hook a freshly created
+# site (every CI run) gets URY's Custom Field fixtures but none of its
+# DocPerms. See ury.install.ensure_role_permissions for the full write-up.
 after_install = "ury.install.after_install"
 
 # Uninstallation
@@ -157,13 +201,33 @@ before_uninstall = "ury.uninstall.uninstall"
 # 	"Event": "frappe.desk.doctype.event.event.has_permission",
 # }
 
+permission_query_conditions = {
+    "Quality Review": "ury.ury.hooks.checklist.permission_checklists",
+}
+
 # DocType Class
 # ---------------
 # Override standard doctype classes
 
-# override_doctype_class = {
-# 	"ToDo": "custom_app.overrides.CustomToDo"
-# }
+override_doctype_class = {
+	"POS Invoice Merge Log": "ury.ury.class_overrides.pos_invoice_merge_log.CustomPOSInvoiceMergeLog",
+	"POS Invoice": "ury.ury.class_overrides.pos_invoice.CustomPOSInvoice",
+}
+
+# HUF-optional: seeds/self-heals the "URY Dashboard Assistant" Agent record
+# on every migrate. Safe to define even when huf is not installed — the
+# function itself no-ops when "huf" isn't in the installed apps list.
+after_migrate = [
+    "ury.ury.ai_tools.agent_seeding.after_migrate",
+    "ury.setup_customizations.hide_setup_sidebar_options",
+]
+
+# The "URY Sales Plan" Workflow fixture (ury/ury/workflow/ury_sales_plan/ury_sales_plan.json)
+# links to Workflow State / Workflow Action Master records that frappe core does
+# not seed. `bench migrate` syncs fixtures (frappe.modules.utils.sync_fixtures)
+# BEFORE running after_migrate hooks, so seeding these in after_migrate would be
+# too late on a fresh site -- before_migrate runs first, ahead of fixture sync.
+before_migrate = ["ury.ury.workflow.ury_sales_plan.install.before_migrate"]
 
 # Document Events
 # ---------------
@@ -175,29 +239,89 @@ doc_events = {
         "validate": "ury.ury.hooks.ury_pos_invoice.validate",
         "after_insert":"ury.ury.api.ury_kot_order_number.set_order_number",
         "before_submit": "ury.ury.hooks.ury_pos_invoice.before_submit",
-        "on_submit": "ury.ury.hooks.ury_pos_invoice.on_submit",
+        "on_submit": [
+            "ury.ury.hooks.ury_pos_invoice.on_submit",
+            "ury.ury.api.ury_feature_flags.maybe_wire_fulfilment_on_submit",
+        ],
         "on_update": "ury.ury.hooks.ury_pos_invoice.on_update",
         "on_cancel": "ury.ury.hooks.ury_pos_invoice.on_trash",
         "on_trash": "ury.ury.hooks.ury_pos_invoice.on_trash",
     },
     "POS Profile": {"validate": "ury.ury.hooks.ury_pos_profile.validate"},
     "Sales Invoice": {
+        "validate": "ury.ury.hooks.ury_sales_invoice.validate",
         "before_insert": "ury.ury.hooks.ury_sales_invoice.before_insert",
         "on_update":"ury.ury.hooks.ury_sales_invoice.on_update",
+        "on_submit": [
+            "ury.ury.hooks.ury_sales_invoice.round_off_journal_entry",
+            # Close out URY stock reservations at the consolidated Sales
+            # Invoice submit -- the single point at which a POS session's
+            # sale-side stock actually leaves Bin. Guarded internally on
+            # is_consolidated; a no-op for ordinary (non-POS) Sales Invoices.
+            "ury.ury.hooks.ury_sales_invoice.fulfil_reservations_on_consolidation",
+        ],
+        "on_cancel": "ury.ury.hooks.ury_sales_invoice.journal_entry_cancel",
         },
-    "Item": {"validate": "ury.ury.hooks.ury_item.validate"},
+    "Item": {
+        "validate": "ury.ury.hooks.ury_item.validate",
+        "on_update": "ury.ury.hooks.ury_item.on_update"
+    },
     "POS Opening Entry": {
-        "validate":"ury.ury.hooks.ury_pos_opening_entry.set_cashier_room",
-        "before_save": "ury.ury.hooks.ury_pos_opening_entry.before_save",
+        "validate":[
+            "ury.ury.hooks.ury_pos_opening_entry.set_cashier_room",
+            "ury.ury.utils.stock_count_gate.validate_pos_opening_entry",
+        ],
+        "before_save": [
+            "ury.ury.hooks.ury_pos_opening_entry.before_save",
+            "ury.ury.hooks.pos_opening.update_daily_checklists",
+        ],
+        # v16 runs `before_save` hooks ONLY for the save action: the POS
+        # opening screen creates the entry with .submit() (action "submit"
+        # runs validate + before_submit, skipping before_save), so the
+        # checklist gate must also be wired to before_submit -- otherwise
+        # the cashier can open the shift before the Order Taker submitted.
+        "before_submit": "ury.ury.hooks.pos_opening.update_daily_checklists",
         "before_insert":"ury.ury.api.ury_kot_order_number.set_last_invoice_in_pos_open",
         },
     "POS Closing Entry": {
         "before_save": "ury.ury.hooks.ury_pos_closing_entry.before_save",
-        "validate":"ury.ury.hooks.ury_pos_closing_entry.validate"
+        "validate":[
+            "ury.ury.hooks.ury_pos_closing_entry.validate",
+            "ury.ury.utils.stock_count_gate.validate_pos_closing_entry",
+            # T5 / I-10: session-scoped closing reconciliation. Runs AFTER
+            # `ury_pos_closing_entry.validate`, which is what populates
+            # `pos_transactions` for the custom frontend's path -- this
+            # handler reads that table, so the order matters. No-op unless
+            # the branch has `closing_reconciliation_enabled` (tier gate 3).
+            "ury.ury.hooks.ury_pos_closing_reconciliation.validate_closing_reconciliation",
+            "ury.ury.hooks.ury_pos_closing_entry.validate_daily_checklists",
+        ],
+        "on_submit": [
+            "ury.ury.hooks.ury_pos_closing_entry.submit_stock_correction",
+        ],
         },
+    "Quality Review": {
+        "on_update": "ury.ury.hooks.update_accounts.checklist",
+    },
     "URY Menu Course": {
 		"validate": "ury.ury.api.ury_menu_course_validation.validate_priority",
-	}    
+	},
+    "URY KOT": {
+        "on_submit": "ury.ury.api.ury_kot_item_execution_service.seed_kot_item_executions_on_submit",
+    },
+    "AI Provider": {"on_update": "ury.ury.ai_tools.agent_seeding.on_ai_provider_update"},
+    "Stock Reconciliation": {"validate": "ury.ury.utils.stock_reconciliation_guards.validate"},
+    "Customer": {"validate": "ury.ury.hooks.ury_customer.validate"},
+    "BOM": {"before_validate": "ury.ury.hooks.ury_bom.apply_yield_back_calculation"},
+    "Stock Entry": {
+        "validate": "ury.ury.api.ury_manufacture_enforcement.validate_manufacture_requires_work_order",
+    },
+    "Work Order": {
+        "validate": "ury.ury.api.ury_work_order_hooks.validate",
+    },
+    "Production Plan": {
+        "before_cancel": "ury.ury.api.ury_production_plan_cancel_hooks.before_cancel",
+    },
 }
 
 # Scheduled Tasks
@@ -206,14 +330,25 @@ doc_events = {
 scheduler_events = {
     "cron":{
 		"* * * * *":[
-			"ury.ury.api.ury_kot_validation.kotValidationThread"
+			"ury.ury.api.ury_kot_validation.kotValidationThread",
+			"ury.ury.api.ury_fulfilment_posting_service.recover_pending_posting_intents",
+		],
+		"*/5 * * * *":[
+			"ury.ury.services.food_cost_alerts.notify_high_food_cost"
+		],
+		# Backstop only. Reservations are normally closed out at the
+		# consolidated Sales Invoice submit (sale) or on cancellation; this
+		# sweeps rows that reached neither, so capacity is not leaked
+		# forever. Hourly is ample for a job whose TTL is measured in a day.
+		"0 * * * *":[
+			"ury.ury.api.ury_reservation_service.expire_stale_reservations_scheduled"
 		]
-	}
+	},
+	"daily": [
+		"ury.ury.services.yield_check_reminders.notify_overdue_yield_checks"
+	]
 # 	"all": [
 # 		"ury.tasks.all"
-# 	],
-# 	"daily": [
-# 		"ury.tasks.daily"
 # 	],
 # 	"hourly": [
 # 		"ury.tasks.hourly"
@@ -226,10 +361,16 @@ scheduler_events = {
 # 	],
 }
 
+# Demo seeding is a deliberate, on-demand action only (bench command below) —
+# it must never run automatically via the scheduler.
+commands = [
+	"ury.commands.seed_demo_data",
+]
+
 # Testing
 # -------
 
-# before_tests = "ury.install.before_tests"
+before_tests = "ury.install.before_tests"
 
 # Overriding Methods
 # ------------------------------
@@ -265,7 +406,8 @@ on_session_creation = [
 website_path_resolver = [
     "ury.ury.controllers.setup_redirect.website_path_resolver"
 ]
-# after_request = ["ury.utils.after_request"]
+# Sets Service-Worker-Allowed + JS content-type for the Serve PWA worker.
+after_request = ["ury.ury.controllers.serve_pwa.after_request"]
 
 website_redirects = [
     {
@@ -315,6 +457,15 @@ extend_bootinfo = [
 # 	"ury.auth.validate"
 # ]
 
+# HUF (AI assistant app) tool registration — read only if huf is installed
+# alongside this app. HUF's own `huf.ai.tool_registry.sync_app_tools`
+# (registered under HUF's `after_migrate`) reads this hook across every
+# installed app on `bench migrate` and syncs the listed tools into
+# `Agent Tool`/`Agent Tool Function` records. Safe to define even when huf is
+# not installed — an unused hook value is simply never read.
+# See tracks/sa-ai-reports-dashboard/HUF_API_NOTES.md for how this was confirmed.
+huf_tools = "ury.ury.ai_tools.ury_tools_registry.ALL_URY_TOOLS"
+
 fixtures = [
     {
         "doctype": "Custom Field",
@@ -328,6 +479,8 @@ fixtures = [
                     "POS Invoice-order_info",
                     "POS Invoice-order_type",
                     "POS Invoice-waiter",
+                    "POS Invoice-custom_waiter_employee",
+                    "POS Invoice-custom_closing_employee",
                     "POS Invoice-column_break_rwbwf",
                     "POS Invoice-no_of_pax",
                     "POS Invoice-cashier",
@@ -340,6 +493,43 @@ fixtures = [
                     "POS Invoice-print",
                     "POS Invoice-restaurant_table",
                     "POS Invoice-custom_merged_tables",
+                    "Production Plan Item-custom_ury_department",
+                    "Production Plan Item-custom_ury_no_work_order",
+                    # Present on site and in the shipped fixture, but absent
+                    # from this filter, so every `bench export-fixtures` dropped
+                    # them from custom_field.json. Listed here so the export is
+                    # complete rather than lossy.
+                    "BOM-custom_bom_revision",
+                    "Item-custom_opportunity_costs",
+                    "POS Invoice-custom_split_from",
+                    "POS Invoice-custom_split_group",
+                    "Stock Entry-custom_ury_batch_request",
+                    "URY Production Unit-company",
+                    "URY Production Unit-disable",
+                    "URY Restaurant-tax_id",
+                    "URY Room-print_format",
+                    "URY Room-room_name",
+                    "URY Table-table_name",
+                    "Production Plan-custom_ury_section",
+                    "Production Plan-custom_ury_sales_plan",
+                    "Production Plan-custom_ury_department",
+                    "Production Plan-custom_ury_column_break",
+                    "Production Plan-custom_ury_department_warehouse",
+                    "Production Plan-custom_ury_production_state",
+                    "Production Plan-custom_ury_production_started_at",
+                    "Production Plan-custom_ury_tab",
+                    "Production Plan-custom_ury_snapshot_section",
+                    "Production Plan-custom_ury_snapshot_hash",
+                    "Production Plan-custom_ury_result_section",
+                    "Production Plan-custom_ury_production_result",
+                    "Production Plan-custom_ury_execution_section",
+                    "Production Plan-custom_ury_execution_job_id",
+                    "Production Plan-custom_ury_execution_attempt",
+                    "Production Plan-custom_ury_execution_column",
+                    "Production Plan-custom_ury_execution_heartbeat",
+                    "Production Plan-custom_ury_execution_step",
+                    "URY KOT Items-custom_ury_work_order",
+                    "URY Sales Plan-custom_ury_production_plan",
                     "POS Invoice-custom_restaurant_room",
                     "POS Invoice-column_break_gd1mq",
                     "POS Invoice-arrived_time",
@@ -347,15 +537,20 @@ fixtures = [
                     "POS Invoice-section_break_hllcp",
                     "POS Invoice-cancel_reason",
                     "POS Invoice Item-comment",
+                    "POS Invoice Item-reservation_line_key",
                     "POS Invoice Item-custom_course",
                     "POS Invoice-custom_merged_total",
                     "POS Invoice-custom_merged_pos_invoice_details",
                     "POS Invoice-custom_merged_pos_invoice",
                     "POS Invoice-custom_bill_merge_details_section",
+                    "POS Invoice-staff_discount_policy",
+                    "POS Invoice Item-custom_entered_by_employee",
                     "Sales Invoice-mobile_number",
                     "Sales Invoice-order_info",
                     "Sales Invoice-order_type",
                     "Sales Invoice-waiter",
+                    "Sales Invoice-custom_waiter_employee",
+                    "Sales Invoice-custom_closing_employee",
                     "Sales Invoice-column_break_bc56k",
                     "Sales Invoice-no_of_pax",
                     "Sales Invoice-cashier",
@@ -384,10 +579,13 @@ fixtures = [
                     "POS Profile-role_restricted_for_table_order",
                     "POS Profile-view_all_status",
                     "POS Profile-remove_items",
+                    "POS Profile-custom_qty_reduction_allowed_order_types",
                     "POS Profile-restaurant_prefix",
                     "POS Profile-show_image",
                     "POS Profile-custom_daily_pos_close",
                     "POS Profile-custom_checklist_items",
+                    "POS Profile-section_break_wp1tv",
+                    "POS Profile-dependent_checklist",
                     "POS Profile-paid_limit",
                     "POS Profile-table_attention_time",
                     "POS Opening Entry-restaurant_info",
@@ -396,6 +594,7 @@ fixtures = [
                     "POS Opening Entry-branch",
                     "POS Opening Entry-custom_room",
                     "Branch-user",
+                    "Branch-company",
                     "Branch-custom_aggregator_settings",
                     "Branch-custom_aggregators",
                     "Branch-custom_make_unpaid",
@@ -408,12 +607,19 @@ fixtures = [
                     "POS Profile User-custom_main_cashier",
                     "POS Opening Entry-custom_rooms",
                     "POS Opening Entry-custom_sub_pos_close_entry",
+                    "POS Opening Entry-quality_checklist",
+                    "POS Closing Entry-quality_checklist",
                     "POS Closing Entry Detail-custom_closing_amount",
+                    "POS Closing Entry-branch",
                     "POS Profile-custom_edit_order_type",
                     "Printer Settings-kot_print_format_",
                     "Printer Settings-kot",
                     "POS Profile-kot_naming_series",
                     "POS Profile-custom_kot_settings",
+                    "POS Profile-submit_stock_correction",
+                    "POS Closing Entry-draft_stock_correction",
+                    "POS Profile-custom_sales_closing_time",
+                    "POS Profile-custom_wastage_time",
                     "POS Profile-custom_kot_alert",
                     "POS Profile-custom_kot_alert_sound",
                     "POS Profile-custom_kot_warning_time",
@@ -434,8 +640,49 @@ fixtures = [
                     "POS Profile-custom_column_break_wwq3q",
                     "POS Profile-custom_table_order_printer",
                     "POS Profile-custom_reprint_kot_format",
+                    "POS Profile-buying_price_list",
+                    "POS Profile-high_margin",
+                    "POS Profile-low_margin",
+                    "POS Profile-high_volume",
+                    "POS Profile-low_volume",
+                    "POS Profile-high_food_cost",
+                    "POS Profile-custom_wastage_real_time_stock",
+                    "POS Profile-custom_enable_opening_date",
+                    "POS Profile-custom_wastage_time",
+                    "Cost Center-branch",
+                    "Journal Entry-branch",
                     "Employee-payment_amount",
-                    "Employee-payment_type"
+                    "Employee-payment_type",
+                    "Employee-permit_to_view",
+                    "Quality Goal-custom_role",
+                    "Quality Review-branch",
+                    "Quality Review-employee",
+                    "Item-custom_yield_check_cadence",
+                    "Item-custom_yield_check_interval_days",
+                    "Item-custom_yield_percent",
+                    "Item-custom_yield_tracked",
+                    "BOM Item-custom_yield_qty",
+                    "BOM Item-custom_yield_percent",
+                    "Item-disposable_items",
+                    "Item-is_disposable",
+                    "POS Invoice Item-is_disposable",
+                    "POS Invoice Item-disposable_items",
+                    "POS Profile-parcel_disposables",
+                    "POS Profile-table_disposables",
+                    "Stock Reconciliation-branch",
+                    "Stock Entry-branch",
+                    "Stock Entry-custom_ury_posting_intent",
+                    "POS Profile-cash_discount_account",
+                    "Sales Invoice-cash_discount_journal_entry",
+                    "POS Profile-validate_stock_correction",
+                    "POS Profile-validate_daily_p_and_l",
+                    "POS Profile-validate_attendance",
+                    "POS Profile-validate_wastage",
+                    "POS Profile-custom_column_break_ydn1v",
+                    "POS Profile-custom_disposables",
+                    "POS Profile-custom_column_break_bgzjv",
+                    "POS Profile-custom_section_break_bmczy",
+                    "POS Profile-custom_ury_pos_configurations"
                 },
             ]
         ],
@@ -447,16 +694,40 @@ fixtures = [
                 "name",
                 "in",
                 {
-                    "POS Closing Entry Detail-closing_amount-label"
+                    "POS Closing Entry Detail-closing_amount-label",
+                    "POS Invoice Item-qty-allow_on_submit",
+                    "POS Invoice-items-allow_on_submit",
+                    "Stock Entry-main-field_order",
                 }
             ]
         ],
     },
-    {"dt": "Role", "filters": [["role_name", "like", "URY %"]]},
-    {"doctype": "Role", "filters": [["role_name", "in", ["Self Ordering Manager"]]]},
-    {"doctype": "Client Script", "filters": [["module", "=", "URY"]]},
     {
-        "doctype": "Custom HTML Block",
-        "filters": [["name", "in", ["URY POS", "POS V1"]]],
+        "dt": "Quality Goal",
     },
+    # A single merged entry, not two separate ones: frappe.utils.fixtures.
+    # export_fixtures() runs every hooks.fixtures entry independently and
+    # writes each straight to app_path/fixtures/<scrub(doctype)>.json --
+    # so two "Role" entries don't merge, the second silently OVERWRITES
+    # whatever the first wrote. Two separate "Role" dicts here (one
+    # "like URY %", one "in [Self Ordering Manager]") would mean any future
+    # `bench export-fixtures` run drops every "URY *" role -- including
+    # this file's own "URY Sales Plan Controller" -- keeping only
+    # "Self Ordering Manager". or_filters is the correct way to combine
+    # both conditions into the one export this doctype actually gets.
+    {
+        "doctype": "Role",
+        "or_filters": [["role_name", "like", "URY %"], ["role_name", "in", ["Self Ordering Manager"]]],
+    },
+    "Client Script",
+    {"doctype": "Workflow", "filters": [["name", "in", ["URY Sales Plan"]]]},
+    # "Return to Draft" is a new Workflow Action introduced for "URY Sales
+    # Plan" alongside its wider Supersede/Cancel reach -- unlike Desk's own
+    # Workflow-editor UI (whose client JS auto-creates a matching
+    # "Workflow Action Master" row the moment a new action name is typed
+    # into the Transitions grid), fixture-importing the Workflow doctype
+    # directly does NOT auto-create it, so the Workflow Transition child
+    # row's `action` Link field fails validation with a LinkValidationError
+    # on any later re-save/re-validate unless this row already exists.
+    {"doctype": "Workflow Action Master", "filters": [["name", "in", ["Return to Draft"]]]},
 ]

@@ -1,0 +1,192 @@
+[
+ {
+  "docstatus": 0,
+  "doctype": "Workflow",
+  "document_type": "URY Sales Plan",
+  "enable_action_confirmation": 0,
+  "is_active": 1,
+  "modified": "2026-09-21 22:54:55.764206",
+  "name": "URY Sales Plan",
+  "override_status": 0,
+  "send_email_alert": 0,
+  "states": [
+   {
+    "allow_edit": "URY Manager",
+    "avoid_status_override": 0,
+    "doc_status": "0",
+    "evaluate_as_expression": 0,
+    "is_optional_state": 0,
+    "message": null,
+    "next_action_email_template": null,
+    "send_email": 0,
+    "state": "Draft",
+    "update_field": "status",
+    "update_value": "Draft",
+    "workflow_builder_id": null
+   },
+   {
+    "allow_edit": "URY Sales Plan Controller",
+    "avoid_status_override": 0,
+    "doc_status": "0",
+    "evaluate_as_expression": 0,
+    "is_optional_state": 0,
+    "message": null,
+    "next_action_email_template": null,
+    "send_email": 0,
+    "state": "Proposed",
+    "update_field": "status",
+    "update_value": "Proposed",
+    "workflow_builder_id": null
+   },
+   {
+    "allow_edit": "URY Sales Plan Controller",
+    "avoid_status_override": 0,
+    "doc_status": "0",
+    "evaluate_as_expression": 0,
+    "is_optional_state": 0,
+    "message": null,
+    "next_action_email_template": null,
+    "send_email": 0,
+    "state": "Submitted for Approval",
+    "update_field": "status",
+    "update_value": "Submitted for Approval",
+    "workflow_builder_id": null
+   },
+   {
+    "allow_edit": "URY Sales Plan Controller",
+    "avoid_status_override": 0,
+    "doc_status": "1",
+    "evaluate_as_expression": 0,
+    "is_optional_state": 0,
+    "message": null,
+    "next_action_email_template": null,
+    "send_email": 0,
+    "state": "Approved",
+    "update_field": "status",
+    "update_value": "Approved",
+    "workflow_builder_id": null
+   },
+   {
+    "allow_edit": "URY Sales Plan Controller",
+    "avoid_status_override": 0,
+    "doc_status": "1",
+    "evaluate_as_expression": 0,
+    "is_optional_state": 0,
+    "message": null,
+    "next_action_email_template": null,
+    "send_email": 0,
+    "state": "Locked for Production",
+    "update_field": "status",
+    "update_value": "Locked for Production",
+    "workflow_builder_id": null
+   },
+   {
+    "allow_edit": "URY Manager",
+    "avoid_status_override": 0,
+    "doc_status": "2",
+    "evaluate_as_expression": 0,
+    "is_optional_state": 0,
+    "message": null,
+    "next_action_email_template": null,
+    "send_email": 0,
+    "state": "Superseded/Cancelled",
+    "update_field": "status",
+    "update_value": "Superseded/Cancelled",
+    "workflow_builder_id": null
+   }
+  ],
+  "transitions": [
+   {
+    "action": "Propose",
+    "allow_self_approval": 1,
+    "allowed": "URY Manager",
+    "condition": null,
+    "next_state": "Proposed",
+    "send_email_to_creator": 0,
+    "state": "Draft",
+    "transition_tasks": null,
+    "workflow_builder_id": null
+   },
+   {
+    "action": "Submit for Approval",
+    "allow_self_approval": 1,
+    "allowed": "URY Manager",
+    "condition": null,
+    "next_state": "Submitted for Approval",
+    "send_email_to_creator": 0,
+    "state": "Proposed",
+    "transition_tasks": null,
+    "workflow_builder_id": null
+   },
+   {
+    "action": "Approve",
+    "allow_self_approval": 1,
+    "allowed": "URY Manager",
+    "condition": null,
+    "next_state": "Approved",
+    "send_email_to_creator": 0,
+    "state": "Submitted for Approval",
+    "transition_tasks": null,
+    "workflow_builder_id": null
+   },
+   {
+    "action": "Lock for Production",
+    "allow_self_approval": 1,
+    "allowed": "URY Manager",
+    "condition": null,
+    "next_state": "Locked for Production",
+    "send_email_to_creator": 0,
+    "state": "Approved",
+    "transition_tasks": null,
+    "workflow_builder_id": null
+   },
+   {
+    "action": "Return to Draft",
+    "allow_self_approval": 1,
+    "allowed": "URY Sales Plan Controller",
+    "condition": null,
+    "next_state": "Draft",
+    "send_email_to_creator": 0,
+    "state": "Proposed",
+    "transition_tasks": null,
+    "workflow_builder_id": null
+   },
+   {
+    "action": "Return to Draft",
+    "allow_self_approval": 1,
+    "allowed": "URY Sales Plan Controller",
+    "condition": null,
+    "next_state": "Draft",
+    "send_email_to_creator": 0,
+    "state": "Submitted for Approval",
+    "transition_tasks": null,
+    "workflow_builder_id": null
+   },
+   {
+    "action": "Supersede/Cancel",
+    "allow_self_approval": 1,
+    "allowed": "URY Sales Plan Controller",
+    "condition": null,
+    "next_state": "Superseded/Cancelled",
+    "send_email_to_creator": 0,
+    "state": "Approved",
+    "transition_tasks": null,
+    "workflow_builder_id": null
+   },
+   {
+    "action": "Supersede/Cancel",
+    "allow_self_approval": 1,
+    "allowed": "URY Sales Plan Controller",
+    "condition": null,
+    "next_state": "Superseded/Cancelled",
+    "send_email_to_creator": 0,
+    "state": "Locked for Production",
+    "transition_tasks": null,
+    "workflow_builder_id": null
+   }
+  ],
+  "workflow_data": null,
+  "workflow_name": "URY Sales Plan",
+  "workflow_state_field": "status"
+ }
+]

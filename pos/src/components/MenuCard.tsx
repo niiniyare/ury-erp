@@ -1,6 +1,11 @@
-import { FC } from 'react';
-import { cn } from '@ury/ui';
+import { FC, useEffect, useState } from 'react';
+import { MenuItemCard } from '@ury/ui';
 import { formatCurrency } from '@ury/core';
+import {
+  getAvailabilityMessage,
+  getItemAvailability,
+  ItemAvailability,
+} from '../lib/availability-api';
 
 interface MenuCardProps {
   id: string;
@@ -11,76 +16,109 @@ interface MenuCardProps {
   item: string;
   onClick?: () => void;
   disabled?: boolean;
+  branch?: string;
+  company?: string;
+  availability?: ItemAvailability | null;
 }
 
-const MenuCard: FC<MenuCardProps> = ({ 
-  name, 
-  price, 
-  item_image, 
-  course, 
+const MenuCard: FC<MenuCardProps> = ({
+  name,
+  price,
+  item_image,
+  course,
+  item,
   onClick,
-  disabled 
+  disabled,
+  branch,
+  company,
+  availability: propAvailability,
 }) => {
+  const [internalAvailability, setInternalAvailability] = useState<ItemAvailability | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (propAvailability !== undefined) {
+      return;
+    }
+    if (!branch || !company || !item) {
+      setInternalAvailability(null);
+      return;
+    }
+    getItemAvailability({ item_code: item, branch, company })
+      .then((result) => {
+        if (!cancelled) setInternalAvailability(result);
+      })
+      .catch(() => {
+        if (!cancelled) setInternalAvailability(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [item, branch, company, propAvailability]);
+
+  const availability = propAvailability !== undefined ? propAvailability : internalAvailability;
+
+  // `available_qty == null` means "unconstrained" (e.g. an "Always
+  // Available" override) -- never treat it as zero/out-of-stock.
+  const isUnavailable =
+    !!availability &&
+    (!availability.sellable ||
+      (availability.available_qty != null && availability.available_qty <= 0));
+  const unavailableMessage = isUnavailable
+    ? getAvailabilityMessage(availability?.reason_code)
+    : null;
+
+  // Determine badge variant and text for availability status
+  const getAvailabilityTag = (): {
+    variant: 'tagDestructive' | 'tagWarning' | 'tagSuccess';
+    text: string;
+    showDot: boolean;
+  } | null => {
+    if (!availability) return null;
+
+    if (
+      !availability.sellable ||
+      (availability.available_qty != null && availability.available_qty <= 0)
+    ) {
+      return {
+        variant: 'tagDestructive',
+        text: unavailableMessage || 'Unavailable',
+        showDot: false,
+      };
+    }
+
+    if (availability.available_qty != null && availability.available_qty < 5) {
+      return {
+        variant: 'tagWarning',
+        text: `${availability.available_qty} left`,
+        showDot: false,
+      };
+    }
+
+    if (availability.available_qty == null) {
+      return { variant: 'tagSuccess', text: 'Available', showDot: true };
+    }
+
+    return {
+      variant: 'tagSuccess',
+      text: `${availability.available_qty} left`,
+      showDot: true,
+    };
+  };
+
+  const availabilityTag = getAvailabilityTag();
+
   return (
-    <div
-      className={cn(
-        "bg-white rounded-lg shadow-sm overflow-hidden hover:shadow-md transition-shadow cursor-pointer h-56 flex flex-col",
-        disabled && "opacity-50 cursor-not-allowed pointer-events-none"
-      )}
-      onClick={disabled ? undefined : onClick}
-    >
-      {/* Image section - fixed height */}
-      <div className="h-24">
-        {item_image ? (
-          <img
-            src={item_image}
-            alt={name}
-            className="w-full h-full object-cover filter saturate-75 brightness-95"
-            style={{ filter: 'saturate(0.7) brightness(0.95)' }}
-            onError={(e) => {
-              const target = e.target as HTMLImageElement;
-              target.style.display = 'none';
-              const parent = target.parentElement;
-              if (parent) {
-                const placeholder = document.createElement('div');
-                placeholder.className = 'w-full h-full bg-gray-200 flex items-center justify-center text-2xl text-gray-400 font-medium';
-                placeholder.textContent = name.slice(0, 2).toUpperCase();
-                parent.insertBefore(placeholder, target);
-              }
-            }}
-          />
-        ) : (
-          <div className="w-full h-full bg-gray-200 flex items-center justify-center text-2xl text-gray-400 font-medium">
-            {name.slice(0, 2).toUpperCase()}
-          </div>
-        )}
-      </div>
-
-      {/* Content section - flex grow with fixed padding */}
-      <div className="flex-1 p-3 flex flex-col">
-        {/* Name section - fixed height for 2 lines */}
-        <div className="">
-          <h3 className="font-medium text-gray-900 text-sm leading-5 line-clamp-2" title={name}>
-            {name}
-          </h3>
-        </div>
-
-        {/* Course section - fixed height for 1 line */}
-        <div className="h-5 mt-1">
-          <p className="text-xs text-gray-500 truncate" title={course}>
-            {course || ' '}
-          </p>
-        </div>
-
-        {/* Price section - pushed to bottom */}
-        <div className="mt-auto pt-2">
-          <span className="text-sm font-semibold text-gray-900 tabular-nums">
-            {formatCurrency(price)}
-          </span>
-        </div>
-      </div>
-    </div>
+    <MenuItemCard
+      name={name}
+      priceLabel={formatCurrency(price)}
+      imageUrl={item_image}
+      course={course}
+      onClick={onClick}
+      disabled={disabled || isUnavailable}
+      availabilityTag={availabilityTag}
+    />
   );
 };
 
-export default MenuCard; 
+export default MenuCard;

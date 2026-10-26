@@ -6,6 +6,7 @@ export interface PosProfileLimited {
   pos_profile: string;
   branch: string;
   company: string;
+  country?: string;
   waiter: string;
   warehouse: string;
   cashier: string;
@@ -106,8 +107,12 @@ export async function getPosProfileLimitedFields(): Promise<PosProfileLimited> {
 }
 
 export async function getPosProfileFull(posProfileName: string): Promise<PosProfileFull> {
-  const doc = await db.getDoc(DOCTYPES.POS_PROFILE, posProfileName);
-  return doc;
+  // Cashier/Captain roles lack doctype-level read permission on POS Profile,
+  // so a raw `/api/resource/POS Profile/<name>` fetch (db.getDoc) 403s for
+  // them. Use the whitelisted server method instead, which reads the doc
+  // server-side and returns only the fields the frontend needs.
+  const res = await call.get('ury.ury_pos.api.getPosProfileFull', { pos_profile: posProfileName });
+  return res.message;
 }
 
 export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
@@ -121,6 +126,7 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
   // Merge both profiles
   const combinedProfile: PosProfileCombined = {
     ...fullProfile,
+    country: fullProfile.country || limitedProfile.country || '',
     owner: limitedProfile.owner,
     waiter: limitedProfile.waiter,
     cashier: limitedProfile.cashier,

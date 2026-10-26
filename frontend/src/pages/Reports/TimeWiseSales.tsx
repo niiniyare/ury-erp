@@ -1,12 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { call, formatCurrency } from '@ury/core';
-import { StatCard, DataTable, type DataTableColumn } from '@ury/ui';
-import { IndianRupee, Receipt, TrendingUp, Trophy } from 'lucide-react';
+import { KpiStrip, DataTable, type DataTableColumn, DatePicker, Select, PageHeader } from '@ury/ui';
 import { useBranchContext } from '../../context/BranchContext';
 import { BarChartCard } from '../../components/reports/charts/BarChartCard';
 import { toApiDate } from '../../lib/reportDate';
-import { DatePicker } from '../../components/setup/DatePicker';
-import { SearchableSelect } from '../../components/common/SearchableSelect';
 
 interface IntervalRow {
   interval_label: string;
@@ -74,35 +71,32 @@ export function TimeWiseSales() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Time Wise Sales</h1>
-          <p className="text-sm text-muted-foreground">
-            Sales by time of day {activeBranchId === 'all' ? '· All Branches' : ''}
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className="w-40">
-            <SearchableSelect
-              id="bucket-size"
-              value={String(bucketSize)}
-              onChange={(_, val) => setBucketSize(Number(val))}
-              options={BUCKET_OPTIONS.map((b) => ({
-                value: String(b),
-                label: `${b}-hour buckets`,
-              }))}
-              strict
+      <PageHeader
+        title="Time Wise Sales"
+        description={`Sales by time of day ${activeBranchId === 'all' ? '· All Branches' : ''}`}
+        actions={
+          <>
+            <Select
+              value={bucketSize}
+              onChange={(e) => setBucketSize(Number(e.target.value))}
+            >
+              {BUCKET_OPTIONS.map((b) => (
+                <option key={b} value={b}>
+                  {b}-hour buckets
+                </option>
+              ))}
+            </Select>
+            <DatePicker
+              id="report-date"
+              aria-label="Report date"
+              value={date}
+              maxDate={toApiDate(new Date())}
+              onChange={(_id, next) => setDate(next)}
+              className="w-[150px]"
             />
-          </div>
-          <DatePicker
-            id="timewise-sales-date"
-            value={date}
-            maxDate={toApiDate(new Date())}
-            onChange={(_id, val) => setDate(val)}
-            className="w-36"
-          />
-        </div>
-      </div>
+          </>
+        }
+      />
 
       {error && (
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -111,32 +105,21 @@ export function TimeWiseSales() {
       )}
 
       {isLoading && !data ? (
-        <div className="text-sm text-muted-foreground">Loading...</div>
+        <div className="text-sm text-muted-foreground">Loading…</div>
       ) : data ? (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <StatCard
-              label="Total Sales"
-              value={formatCurrency(data.summary.total_sales)}
-              icon={<IndianRupee className="w-4 h-4" />}
-            />
-            <StatCard label="Total Bills" value={data.summary.total_bills} icon={<Receipt className="w-4 h-4" />} />
-            <StatCard
-              label="Avg / Bill"
-              value={formatCurrency(data.summary.avg_sale_per_bill)}
-              icon={<TrendingUp className="w-4 h-4" />}
-            />
-            <StatCard
-              label="Peak Interval"
-              value={data.summary.peak_interval ?? '—'}
-              delta={
-                data.summary.peak_interval
-                  ? { value: formatCurrency(data.summary.peak_interval_sales), direction: 'up' }
-                  : undefined
-              }
-              icon={<Trophy className="w-4 h-4" />}
-            />
-          </div>
+          <KpiStrip
+            items={[
+              { label: 'Total Sales', value: formatCurrency(data.summary.total_sales) },
+              { label: 'Total Bills', value: data.summary.total_bills },
+              { label: 'Avg / Bill', value: formatCurrency(data.summary.avg_sale_per_bill) },
+              {
+                label: 'Peak Interval',
+                value: data.summary.peak_interval ?? '—',
+                hint: data.summary.peak_interval ? formatCurrency(data.summary.peak_interval_sales) : undefined,
+              },
+            ]}
+          />
 
           <BarChartCard
             title="Sales by Time of Day"

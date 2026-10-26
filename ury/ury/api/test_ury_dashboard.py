@@ -1,16 +1,44 @@
 import frappe
 from frappe.tests.utils import FrappeTestCase
+from frappe.utils import get_datetime
 from unittest.mock import patch, MagicMock
 from ury.ury.api.ury_dashboard import (
     get_dashboard_stats,
+    get_department_activity,
     get_needs_attention,
     get_shift_metrics,
     get_baseline,
     get_floor_load,
+    resolve_scope_currency,
 )
 
 
 class TestGetDashboardStats(FrappeTestCase):
+
+    @patch("ury.ury.api.ury_dashboard.frappe.get_all", return_value=["URY Barsha", "URY JVC"])
+    @patch("ury.ury.api.ury_dashboard.frappe.db.count", return_value=0)
+    @patch("ury.ury.api.ury_dashboard.frappe.db.sql")
+    @patch("ury.ury.api.ury_dashboard.frappe.cache")
+    def test_company_scopes_tables_through_branches(self, mock_cache, mock_sql, mock_count, mock_branches):
+        mock_cache.return_value.get_value.return_value = None
+        mock_sql.return_value = [frappe._dict(currency="AED", total_invoices=4, grand_total=1509.9)]
+        result = get_dashboard_stats(company="URY UAE")
+        self.assertEqual(result["orders_today"], 4)
+        mock_branches.assert_called_once_with("Branch", filters={"company": "URY UAE"}, pluck="name")
+        mock_count.assert_any_call("URY Table", {"branch": ["in", ["URY Barsha", "URY JVC"]]})
+        for args, _kwargs in mock_count.call_args_list:
+            self.assertNotIn("company", args[1])
+
+    @patch("ury.ury.api.ury_dashboard.frappe.get_all", return_value=[])
+    @patch("ury.ury.api.ury_dashboard.resolve_scope_currency", return_value="AED")
+    @patch("ury.ury.api.ury_dashboard.frappe.db.count", return_value=0)
+    @patch("ury.ury.api.ury_dashboard.frappe.db.sql", return_value=[])
+    @patch("ury.ury.api.ury_dashboard.frappe.cache")
+    def test_company_branch_mismatch_does_not_count_another_companys_tables(self, mock_cache, mock_sql, mock_count, mock_currency, mock_branches):
+        mock_cache.return_value.get_value.return_value = None
+        get_dashboard_stats(branch="URY Salalah", company="URY UAE")
+        mock_branches.assert_called_once_with("Branch", filters={"company": "URY UAE", "name": "URY Salalah"}, pluck="name")
+        mock_count.assert_any_call("URY Table", {"branch": ["in", []]})
 
     @patch("ury.ury.api.ury_dashboard.frappe.cache")
     def test_cache_hit_returns_immediately(self, mock_cache_obj):
@@ -22,12 +50,13 @@ class TestGetDashboardStats(FrappeTestCase):
         result = get_dashboard_stats(branch="URY Branch")
 
         self.assertEqual(result, cached_data)
-        mock_cache_instance.get_value.assert_called_once_with("ury_dashboard_stats:URY Branch")
+        mock_cache_instance.get_value.assert_called_once_with("ury_dashboard_stats:URY Branch:None")
 
+    @patch("ury.ury.api.ury_dashboard.resolve_scope_currency", return_value="INR")
     @patch("ury.ury.api.ury_dashboard.frappe.db.count")
     @patch("ury.ury.api.ury_dashboard.frappe.db.sql")
     @patch("ury.ury.api.ury_dashboard.frappe.cache")
-    def test_cache_miss_with_branch(self, mock_cache_obj, mock_sql, mock_count):
+    def test_cache_miss_with_branch(self, mock_cache_obj, mock_sql, mock_count, mock_currency):
         mock_cache_instance = MagicMock()
         mock_cache_obj.return_value = mock_cache_instance
         mock_cache_instance.get_value.return_value = None
@@ -44,10 +73,11 @@ class TestGetDashboardStats(FrappeTestCase):
         self.assertEqual(result["total_tables"], 10)
         mock_cache_instance.set_value.assert_called_once()
 
+    @patch("ury.ury.api.ury_dashboard.resolve_scope_currency", return_value="INR")
     @patch("ury.ury.api.ury_dashboard.frappe.db.count")
     @patch("ury.ury.api.ury_dashboard.frappe.db.sql")
     @patch("ury.ury.api.ury_dashboard.frappe.cache")
-    def test_cache_miss_zero_invoices_no_division_error(self, mock_cache_obj, mock_sql, mock_count):
+    def test_cache_miss_zero_invoices_no_division_error(self, mock_cache_obj, mock_sql, mock_count, mock_currency):
         mock_cache_instance = MagicMock()
         mock_cache_obj.return_value = mock_cache_instance
         mock_cache_instance.get_value.return_value = None
@@ -61,10 +91,11 @@ class TestGetDashboardStats(FrappeTestCase):
         self.assertEqual(result["orders_today"], 0)
         self.assertEqual(result["avg_order_value"], 0)
 
+    @patch("ury.ury.api.ury_dashboard.resolve_scope_currency", return_value="INR")
     @patch("ury.ury.api.ury_dashboard.frappe.db.count")
     @patch("ury.ury.api.ury_dashboard.frappe.db.sql")
     @patch("ury.ury.api.ury_dashboard.frappe.cache")
-    def test_cache_miss_no_branch(self, mock_cache_obj, mock_sql, mock_count):
+    def test_cache_miss_no_branch(self, mock_cache_obj, mock_sql, mock_count, _mock_resolve):
         mock_cache_instance = MagicMock()
         mock_cache_obj.return_value = mock_cache_instance
         mock_cache_instance.get_value.return_value = None
@@ -78,6 +109,86 @@ class TestGetDashboardStats(FrappeTestCase):
         self.assertEqual(result["orders_today"], 5)
         self.assertIn("active_tables", result)
         mock_sql.assert_called_once()
+
+
+    @patch("ury.ury.api.ury_dashboard.frappe.db.count")
+    @patch("ury.ury.api.ury_dashboard.frappe.db.sql")
+    @patch("ury.ury.api.ury_dashboard.frappe.cache")
+    def test_single_currency_reports_that_currency(self, mock_cache_obj, mock_sql, mock_count):
+        mock_cache_instance = MagicMock()
+        mock_cache_obj.return_value = mock_cache_instance
+        mock_cache_instance.get_value.return_value = None
+        mock_sql.return_value = [frappe._dict({"currency": "OMR", "total_invoices": 4, "grand_total": 50.5})]
+        mock_count.side_effect = [0, 4]
+
+        result = get_dashboard_stats(branch="Muscat")
+
+        self.assertEqual(result["currency"], "OMR")
+        self.assertEqual(result["todays_sales"], 50.5)
+        self.assertEqual(result["currency_breakdown"], [])
+
+    @patch("ury.ury.api.ury_dashboard.frappe.db.count")
+    @patch("ury.ury.api.ury_dashboard.frappe.db.sql")
+    @patch("ury.ury.api.ury_dashboard.frappe.cache")
+    def test_mixed_currencies_are_not_summed(self, mock_cache_obj, mock_sql, mock_count):
+        mock_cache_instance = MagicMock()
+        mock_cache_obj.return_value = mock_cache_instance
+        mock_cache_instance.get_value.return_value = None
+        mock_sql.return_value = [
+            frappe._dict({"currency": "AED", "total_invoices": 3, "grand_total": 300.0}),
+            frappe._dict({"currency": "OMR", "total_invoices": 2, "grand_total": 40.0}),
+        ]
+        mock_count.side_effect = [1, 8]
+
+        result = get_dashboard_stats()
+
+        self.assertIsNone(result["currency"])
+        self.assertIsNone(result["todays_sales"])
+        self.assertIsNone(result["avg_order_value"])
+        self.assertEqual(result["orders_today"], 5)
+        self.assertEqual(
+            result["currency_breakdown"],
+            [
+                {"currency": "AED", "sales": 300.0, "orders": 3, "avg_order_value": 100.0},
+                {"currency": "OMR", "sales": 40.0, "orders": 2, "avg_order_value": 20.0},
+            ],
+        )
+
+    @patch("ury.ury.api.ury_dashboard.frappe.get_all", return_value=[])
+    @patch("ury.ury.api.ury_dashboard.resolve_scope_currency", return_value="AED")
+    @patch("ury.ury.api.ury_dashboard.frappe.db.count")
+    @patch("ury.ury.api.ury_dashboard.frappe.db.sql")
+    @patch("ury.ury.api.ury_dashboard.frappe.cache")
+    def test_no_invoices_still_reports_scope_currency(self, mock_cache_obj, mock_sql, mock_count, mock_resolve, _mock_branches):
+        mock_cache_instance = MagicMock()
+        mock_cache_obj.return_value = mock_cache_instance
+        mock_cache_instance.get_value.return_value = None
+        mock_sql.return_value = []
+        mock_count.side_effect = [0, 3]
+
+        result = get_dashboard_stats(company="URY UAE")
+
+        self.assertEqual(result["currency"], "AED")
+        self.assertEqual(result["todays_sales"], 0)
+        mock_resolve.assert_called_once_with(None, "URY UAE")
+
+
+class TestResolveScopeCurrency(FrappeTestCase):
+
+    @patch("ury.ury.api.ury_dashboard.frappe.get_cached_value", return_value="OMR")
+    @patch("ury.ury.api.ury_dashboard.frappe.db.get_value", return_value="URY Oman")
+    def test_branch_resolves_through_restaurant_company(self, mock_get_value, mock_cached):
+        self.assertEqual(resolve_scope_currency(branch="Muscat"), "OMR")
+        mock_get_value.assert_called_once_with("URY Restaurant", {"branch": "Muscat"}, "company")
+        mock_cached.assert_called_once_with("Company", "URY Oman", "default_currency")
+
+    @patch("ury.ury.api.ury_dashboard.frappe.get_all", return_value=["AED", "OMR", "AED"])
+    def test_all_companies_with_mixed_currencies_is_none(self, _mock_get_all):
+        self.assertIsNone(resolve_scope_currency())
+
+    @patch("ury.ury.api.ury_dashboard.frappe.get_all", return_value=["AED", "AED"])
+    def test_all_companies_sharing_a_currency(self, _mock_get_all):
+        self.assertEqual(resolve_scope_currency(), "AED")
 
 
 class TestGetNeedsAttention(FrappeTestCase):
@@ -141,6 +252,59 @@ class TestGetNeedsAttention(FrappeTestCase):
 
         self.assertEqual(result, [])
 
+    @patch("ury.ury.api.ury_dashboard.frappe.get_all")
+    @patch("ury.ury.api.ury_dashboard.frappe.db.sql")
+    @patch("ury.ury.api.ury_dashboard.frappe.cache")
+    @patch("ury.ury.api.ury_dashboard.add_to_date")
+    @patch("ury.ury.api.ury_dashboard.get_datetime")
+    @patch("ury.ury.api.ury_dashboard._business_day_bounds")
+    def test_pending_payment_query_is_capped_to_business_day_window(
+        self, mock_bounds, mock_get_datetime, mock_add_to_date, mock_cache_obj, mock_sql, mock_get_all
+    ):
+        """Regression test for the unpaid-orders age-cap bug: the pending-
+        payment query must bound `creation` on both sides (>= shift_start,
+        < shift_end), not just the 15-minute-old lower bound — otherwise a
+        months-old seed draft outside the current shift window is picked up.
+        """
+        mock_cache_instance = MagicMock()
+        mock_cache_obj.return_value = mock_cache_instance
+        mock_cache_instance.get_value.return_value = None
+
+        mock_get_datetime.return_value = "2026-08-19 10:00:00"
+        mock_add_to_date.return_value = "2026-08-19 09:45:00"
+        mock_bounds.return_value = ("2026-08-19 06:00:00", "2026-08-20 06:00:00")
+
+        mock_sql.return_value = []
+        mock_get_all.side_effect = [[], [], []]
+
+        get_needs_attention(branch="URY Branch")
+
+        mock_bounds.assert_called_once_with("URY Branch")
+
+        query, params = mock_sql.call_args[0][0], mock_sql.call_args[0][1]
+        self.assertIn("creation >= %(shift_start)s", query)
+        self.assertIn("creation < %(shift_end)s", query)
+        self.assertEqual(params["shift_start"], "2026-08-19 06:00:00")
+        self.assertEqual(params["shift_end"], "2026-08-20 06:00:00")
+
+    def test_business_day_window_excludes_old_draft_includes_recent_one(self):
+        """Focused unit test of the date-window condition itself (no DB): a
+        draft created before `shift_start` must fall outside the
+        [shift_start, shift_end) window used by the pending-payment query,
+        while one created just after `shift_start` must fall inside it.
+        """
+        shift_start = get_datetime("2026-08-19 06:00:00")
+        shift_end = get_datetime("2026-08-20 06:00:00")
+
+        old_draft_creation = get_datetime("2026-06-01 12:00:00")
+        recent_draft_creation = get_datetime("2026-08-19 09:00:00")
+
+        def in_window(creation):
+            return shift_start <= creation < shift_end
+
+        self.assertFalse(in_window(old_draft_creation))
+        self.assertTrue(in_window(recent_draft_creation))
+
 
 class TestGetShiftMetrics(FrappeTestCase):
 
@@ -197,6 +361,133 @@ class TestGetShiftMetrics(FrappeTestCase):
 
         self.assertEqual(result["covers"], 0)
         self.assertEqual(result["avg_per_cover"], 0)
+
+
+class TestGetDepartmentActivity(FrappeTestCase):
+
+    @patch("ury.ury.api.ury_dashboard.frappe.cache")
+    def test_cache_hit_returns_immediately(self, mock_cache_obj):
+        mock_cache_instance = MagicMock()
+        mock_cache_obj.return_value = mock_cache_instance
+        cached_activity = {"branch": "URY Branch", "as_of": "now", "rows": []}
+        mock_cache_instance.get_value.return_value = cached_activity
+
+        result = get_department_activity(branch="URY Branch")
+
+        self.assertEqual(result, cached_activity)
+        mock_cache_instance.get_value.assert_called_once()
+
+    @patch("ury.ury.api.ury_dashboard.frappe.cache")
+    @patch("ury.ury.api.ury_dashboard.frappe.db.sql")
+    @patch("ury.ury.api.ury_dashboard.frappe.db.get_value")
+    def test_combines_kot_and_work_order_rows_for_the_same_department(
+        self, mock_get_value, mock_sql, mock_cache_obj
+    ):
+        mock_cache_instance = MagicMock()
+        mock_cache_obj.return_value = mock_cache_instance
+        mock_cache_instance.get_value.return_value = None
+        mock_get_value.return_value = None
+
+        mock_sql.side_effect = [
+            [frappe._dict({"department": "Kitchen", "tickets_fired": 10, "tickets_served": 6})],
+            [frappe._dict({"department": "Kitchen", "work_orders_completed": 12, "qty_produced": 108.0})],
+        ]
+
+        result = get_department_activity(branch="URY Branch")
+
+        self.assertEqual(len(result["rows"]), 1)
+        row = result["rows"][0]
+        self.assertEqual(row["department"], "Kitchen")
+        self.assertEqual(row["tickets_fired"], 10)
+        self.assertEqual(row["tickets_served"], 6)
+        self.assertEqual(row["work_orders_completed"], 12)
+        self.assertEqual(row["qty_produced"], 108.0)
+
+    @patch("ury.ury.api.ury_dashboard.frappe.cache")
+    @patch("ury.ury.api.ury_dashboard.frappe.db.sql")
+    @patch("ury.ury.api.ury_dashboard.frappe.db.get_value")
+    def test_department_with_only_kot_activity_has_zeroed_production_fields(
+        self, mock_get_value, mock_sql, mock_cache_obj
+    ):
+        """A department can fire/serve KOTs without a Work Order ever
+        completing in the window (e.g. a DIRECT_RETAIL department) -- that
+        must render as zero, not be dropped or crash on a missing key."""
+        mock_cache_instance = MagicMock()
+        mock_cache_obj.return_value = mock_cache_instance
+        mock_cache_instance.get_value.return_value = None
+        mock_get_value.return_value = None
+
+        mock_sql.side_effect = [
+            [frappe._dict({"department": "Bar", "tickets_fired": 3, "tickets_served": 1})],
+            [],
+        ]
+
+        result = get_department_activity(branch="URY Branch")
+
+        row = result["rows"][0]
+        self.assertEqual(row["department"], "Bar")
+        self.assertEqual(row["tickets_fired"], 3)
+        self.assertEqual(row["work_orders_completed"], 0)
+        self.assertEqual(row["qty_produced"], 0)
+
+    @patch("ury.ury.api.ury_dashboard.frappe.cache")
+    @patch("ury.ury.api.ury_dashboard.frappe.db.sql")
+    @patch("ury.ury.api.ury_dashboard.frappe.db.get_value")
+    def test_department_with_only_production_has_zeroed_kot_fields(self, mock_get_value, mock_sql, mock_cache_obj):
+        mock_cache_instance = MagicMock()
+        mock_cache_obj.return_value = mock_cache_instance
+        mock_cache_instance.get_value.return_value = None
+        mock_get_value.return_value = None
+
+        mock_sql.side_effect = [
+            [],
+            [frappe._dict({"department": "Salad", "work_orders_completed": 4, "qty_produced": 40.0})],
+        ]
+
+        result = get_department_activity(branch="URY Branch")
+
+        row = result["rows"][0]
+        self.assertEqual(row["department"], "Salad")
+        self.assertEqual(row["tickets_fired"], 0)
+        self.assertEqual(row["tickets_served"], 0)
+        self.assertEqual(row["work_orders_completed"], 4)
+
+    @patch("ury.ury.api.ury_dashboard.frappe.cache")
+    @patch("ury.ury.api.ury_dashboard.frappe.db.sql")
+    @patch("ury.ury.api.ury_dashboard.frappe.db.get_value")
+    def test_no_activity_returns_empty_rows_not_an_error(self, mock_get_value, mock_sql, mock_cache_obj):
+        mock_cache_instance = MagicMock()
+        mock_cache_obj.return_value = mock_cache_instance
+        mock_cache_instance.get_value.return_value = None
+        mock_get_value.return_value = None
+
+        mock_sql.side_effect = [[], []]
+
+        result = get_department_activity(branch="URY Branch")
+
+        self.assertEqual(result["rows"], [])
+        self.assertEqual(result["branch"], "URY Branch")
+
+    @patch("ury.ury.api.ury_dashboard.frappe.cache")
+    @patch("ury.ury.api.ury_dashboard.frappe.db.sql")
+    @patch("ury.ury.api.ury_dashboard.frappe.db.get_value")
+    def test_rows_are_sorted_by_department(self, mock_get_value, mock_sql, mock_cache_obj):
+        mock_cache_instance = MagicMock()
+        mock_cache_obj.return_value = mock_cache_instance
+        mock_cache_instance.get_value.return_value = None
+        mock_get_value.return_value = None
+
+        mock_sql.side_effect = [
+            [
+                frappe._dict({"department": "Salad", "tickets_fired": 1, "tickets_served": 1}),
+                frappe._dict({"department": "Bar", "tickets_fired": 2, "tickets_served": 2}),
+            ],
+            [],
+        ]
+
+        result = get_department_activity(branch="URY Branch")
+
+        self.assertEqual([row["department"] for row in result["rows"]], ["Bar", "Salad"])
 
 
 class TestGetBaseline(FrappeTestCase):

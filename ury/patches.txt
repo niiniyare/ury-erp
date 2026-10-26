@@ -1,8 +1,37 @@
 [pre_model_sync]
 # Patches added in this section will be executed before doctypes are migrated
+ury.patches.v3_33.normalize_kot_start_time_serv
 
 [post_model_sync]
 # Patches added in this section will be executed after doctypes are migrated
 ury.patches.v2_0.default_permissions
 ury.patches.v2_0.fix_waiter_order_slip_print_format
-ury.patches.v2_0.admin_permissions
+ury.patches.v3_0.repair_waiter_user_values
+ury.patches.v3_0.backfill_invoice_employee_attribution
+ury.patches.v3_0.backfill_pos_invoice_item_entered_by
+ury.patches.v3_14.production_unit_department_migration
+ury.patches.v3_15.backfill_production_unit_company
+ury.patches.v3_16.add_stock_entry_posting_intent_field
+ury.patches.v3_17.backfill_bom_yield_qty_and_revision
+ury.patches.v3_18.add_batch_sourcing_mode_fields
+ury.patches.v3_19.add_pos_closing_entry_branch_field
+ury.patches.v3_20.migrate_stock_authority_flag_to_branch_policy
+ury.patches.v3_21.backfill_kot_item_execution_revision_key
+ury.patches.v3_22.backfill_sales_plan_docstatus
+ury.patches.v3_23.ensure_erpnext_address_contact_custom_fields
+ury.patches.v3_24.backfill_branch_company
+ury.patches.v3_25.add_stock_reservation_availability_index
+ury.patches.v3_26.grant_item_yield_standard_permlevel
+ury.patches.v3_26.add_production_plan_department_execution_fields
+ury.patches.v3_26.report_pre_produced_direct_retail_warehouse_mismatch
+ury.patches.v3_27.reorder_production_plan_ury_tab
+ury.patches.v3_28.layout_production_plan_ury_fields
+ury.patches.v3_29.grant_stock_reservation_write_to_order_roles
+ury.patches.v3_30.add_production_plan_item_no_work_order_field
+ury.patches.v3_31.refactor_wastage_doctype
+ury.patches.v3_32.fix_stock_entry_branch_field_layout
+ury.patches.v3_34.grant_ury_manager_read_on_control_doctypes
+ury.patches.v3_35.grant_ury_manager_read_on_log_and_snapshot
+ury.patches.v3_36.delete_prefixed_dashboard_charts
+ury.patches.v3_37.delete_yield_variance_trend_chart
+ury.patches.v3_38.grant_ury_manager_read_on_authorization_and_fulfilment

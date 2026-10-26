@@ -58,17 +58,7 @@ const OrderTypeSelect = ({ disabled }: OrderTypeSelectProps) => {
       <div className="flex gap-2 overflow-x-auto pb-2 -mx-2 px-2">
         {ORDER_TYPES.map(({ value, icon: Icon }) => {
           const isDineIn = value === DINE_IN;
-          
-          let isUpdatingDisabled = isUpdatingOrder;
-          if (isUpdatingOrder && posProfile?.edit_order_type) {
-            const isCurrentTypeToggleable = selectedOrderType === 'Take Away' || selectedOrderType === 'Delivery';
-            const isValueToggleable = value === 'Take Away' || value === 'Delivery';
-            if (isCurrentTypeToggleable && isValueToggleable) {
-              isUpdatingDisabled = false;
-            }
-          }
-
-          const isDisabled = disabled || (isDineIn && isRestrictedFromTableOrders) || isUpdatingDisabled;
+          const isDisabled = disabled || (isDineIn && isRestrictedFromTableOrders) || isUpdatingOrder;
           
           return (
             <Button
@@ -79,7 +69,7 @@ const OrderTypeSelect = ({ disabled }: OrderTypeSelectProps) => {
                 'h-fit flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap bg-white border transition-colors',
                 selectedOrderType === value
                 ? 'text-primary-700 bg-primary-50 border-primary-600 hover:bg-primary-50'
-                : 'text-gray-700 border-gray-200 hover:bg-gray-50',
+                : 'text-gray-700 border-border hover:bg-gray-50',
                 isDisabled && 'opacity-50 cursor-not-allowed'
               )}
               disabled={isDisabled}

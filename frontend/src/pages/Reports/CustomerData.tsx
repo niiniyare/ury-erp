@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { call, formatCurrency } from '@ury/core';
-import { StatCard, DataTable, type DataTableColumn } from '@ury/ui';
-import { Receipt, IndianRupee, TrendingUp, Search } from 'lucide-react';
+import { KpiStrip, type KpiItemProps, DataTable, type DataTableColumn, Input, PageHeader } from '@ury/ui';
+import { Search } from 'lucide-react';
 import { useBranchContext } from '../../context/BranchContext';
 import { DateRangeFilter, type DateRangeValue } from '../../components/reports/DateRangeFilter';
 import { toApiDate } from '../../lib/reportDate';
@@ -31,10 +31,32 @@ interface CustomerDataResult {
   };
 }
 
+// Real per-customer rows from `get_daywise_customer_details`, grouped on
+// POS Invoice's `customer` link field -- not the denormalized `customer_name`
+// text that search_customers matches on, so two customers sharing a display
+// name (real data on the demo site: "fairooz" and "Fairooz BZ") stay
+// distinct rows here.
+interface CustomerListingRow {
+  customer_id: string;
+  customer_name: string;
+  mobile_number: string | null;
+  visit_count: number;
+  first_visit: string;
+  last_visit: string;
+}
+
 const columns: DataTableColumn<InvoiceRow>[] = [
   { key: 'date', header: 'Date' },
   { key: 'invoice', header: 'Invoice' },
   { key: 'amount', header: 'Amount', render: (r) => formatCurrency(r.amount), align: 'right' },
+];
+
+const listingColumns: DataTableColumn<CustomerListingRow>[] = [
+  { key: 'customer_name', header: 'Customer' },
+  { key: 'mobile_number', header: 'Mobile', render: (r) => r.mobile_number || '—' },
+  { key: 'visit_count', header: 'Visits', align: 'right' },
+  { key: 'first_visit', header: 'First Visit' },
+  { key: 'last_visit', header: 'Last Visit' },
 ];
 
 export function CustomerData() {
@@ -49,6 +71,10 @@ export function CustomerData() {
   const [data, setData] = useState<CustomerDataResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [listingRows, setListingRows] = useState<CustomerListingRow[]>([]);
+  const [listingLoading, setListingLoading] = useState(true);
+  const [listingError, setListingError] = useState<string | null>(null);
 
   useEffect(() => {
     if (query.length < 2) {
@@ -67,6 +93,40 @@ export function CustomerData() {
     }, 250);
     return () => clearTimeout(timeout);
   }, [query]);
+
+  // Default listing: every customer who actually visited in the selected
+  // range, so the page opens on a real table instead of an empty "search
+  // and select" prompt. Sorted by visit count so the most frequent
+  // customers surface first -- the backend itself orders by name.
+  useEffect(() => {
+    let cancelled = false;
+    setListingLoading(true);
+    setListingError(null);
+
+    (async () => {
+      try {
+        const branch = activeBranchId === 'all' ? undefined : activeBranchId;
+        const res = await call<{ message: { customers: CustomerListingRow[] } }>(
+          'ury.ury.report_api.customers.get_daywise_customer_details',
+          { branch, start_date: toApiDate(range.from), end_date: toApiDate(range.to) },
+        );
+        if (cancelled) return;
+        const rows = res.message?.customers ?? [];
+        setListingRows([...rows].sort((a, b) => b.visit_count - a.visit_count));
+      } catch (err) {
+        if (!cancelled) {
+          setListingRows([]);
+          setListingError(err instanceof Error ? err.message : 'Unable to load the customer list.');
+        }
+      } finally {
+        if (!cancelled) setListingLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeBranchId, range]);
 
   const fetchData = useCallback(async () => {
     if (!selectedCustomer) return;
@@ -94,18 +154,16 @@ export function CustomerData() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Customer Data</h1>
-          <p className="text-sm text-muted-foreground">Per-customer purchase history</p>
-        </div>
-        <DateRangeFilter value={range} onChange={setRange} />
-      </div>
+      <PageHeader
+        title="Customer Data"
+        description="Per-customer purchase history"
+        actions={<DateRangeFilter value={range} onChange={setRange} />}
+      />
 
       <div className="relative max-w-sm">
-        <div className="flex items-center border border-input rounded-md px-3 py-2 gap-2">
+        <div className="flex items-center border border-input rounded-md px-3.5 gap-2">
           <Search className="w-4 h-4 text-muted-foreground shrink-0" />
-          <input
+          <Input
             type="text"
             placeholder="Search customer by name..."
             value={query}
@@ -114,7 +172,8 @@ export function CustomerData() {
               setSelectedCustomer(null);
               setData(null);
             }}
-            className="flex-1 text-sm outline-none"
+            className="border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 px-0"
+            aria-label="Search customer by name"
           />
         </div>
         {suggestions.length > 0 && !selectedCustomer && (
@@ -143,28 +202,38 @@ export function CustomerData() {
         </div>
       )}
 
-      {!selectedCustomer && !error && (
-        <div className="text-sm text-muted-foreground">Search and select a customer to view their history.</div>
-      )}
-
-      {isLoading && <div className="text-sm text-muted-foreground">Loading...</div>}
+      {isLoading && <div className="text-sm text-muted-foreground">Loading…</div>}
 
       {data && !isLoading && (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <StatCard label="Visits" value={data.summary.visit_count} icon={<Receipt className="w-4 h-4" />} />
-            <StatCard
-              label="Total Spend"
-              value={formatCurrency(data.summary.total_spend)}
-              icon={<IndianRupee className="w-4 h-4" />}
-            />
-            <StatCard
-              label="Avg Spend / Visit"
-              value={formatCurrency(data.summary.avg_spend)}
-              icon={<TrendingUp className="w-4 h-4" />}
-            />
-          </div>
+          <KpiStrip
+            items={[
+              { label: 'Visits', value: data.summary.visit_count },
+              { label: 'Total Spend', value: formatCurrency(data.summary.total_spend) },
+              { label: 'Avg Spend / Visit', value: formatCurrency(data.summary.avg_spend) },
+            ] satisfies KpiItemProps[]}
+          />
           <DataTable columns={columns} rows={data.invoices} isLoading={isLoading} />
+        </>
+      )}
+
+      {!selectedCustomer && !error && (
+        <>
+          {listingError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {listingError}
+            </div>
+          )}
+          <DataTable
+            columns={listingColumns}
+            rows={listingRows}
+            isLoading={listingLoading}
+            emptyMessage="No customers visited in this range."
+            onRowClick={(row) => {
+              setSelectedCustomer(row.customer_name);
+              setQuery(row.customer_name);
+            }}
+          />
         </>
       )}
     </div>

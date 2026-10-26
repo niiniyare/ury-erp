@@ -1,6 +1,8 @@
 import frappe
 from frappe import _
 
+from ury.ury.controllers.setup_redirect import is_ury_setup_complete, repair_interrupted_setup
+
 @frappe.whitelist()
 def get_business_setup():
     if frappe.session.user == "Guest":
@@ -26,20 +28,51 @@ def get_business_setup():
     }
 
 @frappe.whitelist()
-def get_branches():
+def get_branches(company=None):
     if frappe.session.user == "Guest":
         frappe.throw("Not permitted")
 
-    comp = frappe.defaults.get_user_default("Company") or frappe.db.get_value("Company", {}, "name")
+    comp = company or frappe.defaults.get_user_default("Company") or frappe.db.get_value("Company", {}, "name")
     tax_id = frappe.db.get_value("Company", comp, "tax_id") if comp else None
     
     branches = frappe.get_all("Branch", fields=["name", "branch"])
-    return [{"id": b.name, "name": b.branch, "tax_id": tax_id} for b in branches]
+    
+    rest_filters = {}
+    if company:
+        rest_filters["company"] = company
+    restaurants = frappe.get_all("URY Restaurant", filters=rest_filters, fields=["branch", "company", "invoice_series_prefix", "aggregator_series_prefix"])
+    rest_map = {}
+    for r in restaurants:
+        if r.get("branch"):
+            rest_map[r.get("branch")] = r
+
+    res = []
+    for b in branches:
+        r = rest_map.get(b.name) or rest_map.get(b.branch)
+        if company and not r:
+            continue
+        res.append({
+            "id": b.name,
+            "name": b.branch,
+            "tax_id": tax_id,
+            "company": r.get("company") if r else None,
+            "invoice_series_prefix": r.get("invoice_series_prefix") if r else None,
+            "aggregator_series_prefix": r.get("aggregator_series_prefix") if r else None
+        })
+    return res
 
 @frappe.whitelist()
 def update_business_setup(branch=None, restaurant=None):
     if frappe.session.user == "Guest":
         frappe.throw("Not permitted")
+
+    # Branch/Restaurant are business-configuration records; require the
+    # caller to actually hold write permission on them (URY Manager per
+    # this app's DocPerm fixtures -- note System Manager is NOT granted
+    # write on Branch/URY Restaurant here, live-verified against the
+    # actual fixtures) rather than trusting any authenticated session.
+    if not frappe.has_permission("Branch", "write") or not frappe.has_permission("URY Restaurant", "write"):
+        frappe.throw(_("Not permitted"), frappe.PermissionError)
 
     if branch:
         if isinstance(branch, str):
@@ -91,11 +124,47 @@ def update_business_setup(branch=None, restaurant=None):
             
     return {"status": "success"}
 
+# Roles a non-System-Manager caller is allowed to hand out via
+# create_setup_user(). Anything not in this set (System Manager,
+# Administrator, etc.) requires the caller to already be a System Manager.
+_SELF_SERVICE_SETUP_ROLES = {"URY Cashier", "URY Captain", "URY Manager"}
+
+
+def _is_bootstrap_setup():
+    """True only while this site has no real System Manager user yet and
+    setup has not been completed -- the one-time window a fresh install is
+    meant to be configured through before any authentication exists."""
+    from frappe.utils import cint
+
+    if cint(frappe.db.get_single_value("System Settings", "setup_complete")):
+        return False
+
+    existing_managers = frappe.get_all(
+        "Has Role",
+        filters={"role": "System Manager", "parenttype": "User"},
+        fields=["parent"],
+    )
+    real_managers = {r.parent for r in existing_managers if r.parent not in ("Administrator", "Guest")}
+    return not real_managers
+
+
 @frappe.whitelist()
 def create_setup_user(email, name, password=None, role="URY Cashier"):
+    caller = frappe.session.user
+    is_system_manager = caller == "Administrator" or "System Manager" in frappe.get_roles(caller)
+
+    if not is_system_manager and not _is_bootstrap_setup():
+        frappe.throw(_("Not permitted"), frappe.PermissionError)
+
+    if not is_system_manager and role not in _SELF_SERVICE_SETUP_ROLES:
+        # A caller who isn't already a System Manager (including the
+        # one-time bootstrap window, where nobody is authenticated yet)
+        # cannot mint a user with an elevated/arbitrary role.
+        frappe.throw(_("Not permitted to assign role {0}").format(role), frappe.PermissionError)
+
     if frappe.db.exists("User", email):
         return {"status": "exists", "email": email}
-    
+
     user = frappe.get_doc({
         "doctype": "User",
         "email": email,
@@ -105,6 +174,10 @@ def create_setup_user(email, name, password=None, role="URY Cashier"):
         "user_type": "System User",
         "roles": [{"role": role}]
     })
+    # Permission check above already gates who may reach this point and
+    # which role they may assign; ignore_permissions is only needed because
+    # a Guest-tier bootstrap caller has no User-doctype create permission at
+    # all yet, which is expected during the one-time setup window.
     user.insert(ignore_permissions=True)
     if password:
         from frappe.utils.password import update_password
@@ -113,15 +186,84 @@ def create_setup_user(email, name, password=None, role="URY Cashier"):
 
 @frappe.whitelist()
 def submit_configure_data(data):
+    if frappe.session.user == "Guest":
+        frappe.throw("Not permitted")
+
+    # Step 1 (Frappe's setup_complete) already sets System Settings.setup_complete,
+    # so that flag cannot guard Step 2. Use the URY-level check instead.
+    if is_ury_setup_complete():
+        frappe.throw("Setup already completed")
+
     if isinstance(data, str):
         data = frappe.parse_json(data)
-        
+
     results = {}
     user = frappe.session.user
 
+    try:
+        outcome = _run_configure_data(data, results, user)
+        # Step 1 may have died before Frappe's "Wrapping up" stage, leaving the
+        # Desk home page on the wizard. The site is configured now, so settle
+        # that here rather than leaving Desk to loop on it.
+        repair_interrupted_setup()
+        return outcome
+    except frappe.PermissionError:
+        frappe.db.rollback()
+        raise
+    except Exception as e:
+        frappe.db.rollback()
+        frappe.log_error(
+            title="Business Setup Configure Error",
+            message=frappe.get_traceback(),
+        )
+        raise
+
+
+def _prepare_and_insert_item(item_data):
+    """Safely insert an Item, handling india_compliance/GST HSN code requirements if present."""
+    meta = frappe.get_meta("Item")
+    hsn_code = item_data.get("gst_hsn_code") or "999512"
+
+    if meta.has_field("gst_hsn_code") or frappe.db.has_column("Item", "gst_hsn_code"):
+        item_data["gst_hsn_code"] = hsn_code
+        if frappe.db.exists("DocType", "GST HSN Code") and not frappe.db.exists("GST HSN Code", hsn_code):
+            try:
+                frappe.get_doc({
+                    "doctype": "GST HSN Code",
+                    "hsn_code": hsn_code,
+                    "description": "Services"
+                }).insert(ignore_permissions=True)
+            except Exception:
+                pass
+
+    doc = frappe.get_doc(item_data)
+    try:
+        doc.insert(ignore_permissions=True)
+    except frappe.ValidationError as e:
+        err_msg = str(e)
+        if "HSN" in err_msg or "SAC" in err_msg:
+            if meta.has_field("gst_hsn_code"):
+                doc.gst_hsn_code = hsn_code
+                if frappe.db.exists("DocType", "GST HSN Code") and not frappe.db.exists("GST HSN Code", hsn_code):
+                    try:
+                        frappe.get_doc({
+                            "doctype": "GST HSN Code",
+                            "hsn_code": hsn_code,
+                            "description": "Services"
+                        }).insert(ignore_permissions=True)
+                    except Exception:
+                        pass
+            doc.flags.ignore_mandatory = True
+            doc.insert(ignore_permissions=True)
+        else:
+            raise
+    return doc
+
+
+def _run_configure_data(data, results, user):
     # Step 0: Preparing setup
     frappe.publish_realtime("ury_configure_progress", {"step": 0, "status": "loading"}, user=user)
-    
+
     # Derive default company from site defaults or latest created company
     default_company = frappe.defaults.get_user_default("Company") or frappe.db.get_value("Company", {}, "name")
     if not default_company:
@@ -283,7 +425,7 @@ def submit_configure_data(data):
 
         # 5b. PASS 1: Create ERPNext Item DocType record with Maintain Stock (is_stock_item) = 0!
         if not frappe.db.exists("Item", item_title):
-            item_doc = frappe.get_doc({
+            item_doc = _prepare_and_insert_item({
                 "doctype": "Item",
                 "item_code": item_title,
                 "item_name": item_title,
@@ -293,7 +435,6 @@ def submit_configure_data(data):
                 "is_stock_item": 0,  # Maintain Stock == 0
                 "is_sales_item": 1
             })
-            item_doc.insert(ignore_permissions=True)
             results["created_items"].append(item_doc.name)
 
         # Build child table row referencing the created ERPNext Item

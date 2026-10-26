@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { call, formatCurrency } from '@ury/core';
-import { StatCard, DataTable, type DataTableColumn, Button } from '@ury/ui';
-import { Package, IndianRupee, Hash, ChevronLeft, ChevronRight } from 'lucide-react';
+import { KpiStrip, DataTable, type DataTableColumn, Button, Input, PageHeader } from '@ury/ui';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useBranchContext } from '../../context/BranchContext';
 import { DateRangeFilter, type DateRangeValue } from '../../components/reports/DateRangeFilter';
 import { toApiDate } from '../../lib/reportDate';
@@ -79,24 +79,23 @@ export function ItemWiseSales() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Item Wise Sales</h1>
-          <p className="text-sm text-muted-foreground">
-            Best-selling items {activeBranchId === 'all' ? '· All Branches' : ''}
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <input
-            type="text"
-            placeholder="Search items..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="border border-input rounded-md px-3 py-1.5 text-sm w-40"
-          />
-          <DateRangeFilter value={range} onChange={setRange} />
-        </div>
-      </div>
+      <PageHeader
+        title="Item Wise Sales"
+        description={`Best-selling items ${activeBranchId === 'all' ? '· All Branches' : ''}`}
+        actions={
+          <>
+            <Input
+              type="text"
+              placeholder="Search items..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-40"
+              aria-label="Search items"
+            />
+            <DateRangeFilter value={range} onChange={setRange} />
+          </>
+        }
+      />
 
       {error && (
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -105,15 +104,13 @@ export function ItemWiseSales() {
       )}
 
       {data && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <StatCard label="Unique Items Sold" value={data.summary.unique_items} icon={<Package className="w-4 h-4" />} />
-          <StatCard label="Total Qty" value={data.summary.total_qty} icon={<Hash className="w-4 h-4" />} />
-          <StatCard
-            label="Total Amount"
-            value={formatCurrency(data.summary.total_amount)}
-            icon={<IndianRupee className="w-4 h-4" />}
-          />
-        </div>
+        <KpiStrip
+          items={[
+            { label: 'Unique Items Sold', value: data.summary.unique_items },
+            { label: 'Total Qty', value: data.summary.total_qty },
+            { label: 'Total Amount', value: formatCurrency(data.summary.total_amount) },
+          ]}
+        />
       )}
 
       <DataTable columns={columns} rows={data?.items ?? []} isLoading={isLoading} />
@@ -124,12 +121,11 @@ export function ItemWiseSales() {
             Page {pagination.page} of {pagination.total_pages}
           </span>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+            <Button variant="outline" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
               <ChevronLeft className="w-4 h-4" /> Prev
             </Button>
             <Button
               variant="outline"
-              size="sm"
               disabled={page >= pagination.total_pages}
               onClick={() => setPage((p) => p + 1)}
             >

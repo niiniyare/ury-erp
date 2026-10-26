@@ -1,10 +1,14 @@
+from datetime import datetime as _datetime, timedelta as _timedelta
+
 import frappe
 
 from frappe.utils import get_datetime, add_to_date, today
+from ury.ury.report_api.utils import require_manager
 
 
 @frappe.whitelist(methods=["GET"])
 def get_service_line(branch=None):
+	require_manager()
 	cache_key = f"ury_dashboard_service_line:{branch}"
 	cached = frappe.cache().get_value(cache_key)
 	if cached:
@@ -30,7 +34,32 @@ def get_service_line(branch=None):
 
 		minutes = None
 		if t.latest_invoice_time:
-			minutes = int((now - get_datetime(str(t.latest_invoice_time))).total_seconds() // 60)
+			# `URY Table.latest_invoice_time` is a **Time** field (confirmed
+			# via ury_table.json), not Datetime -- Frappe's ORM returns Time
+			# columns as `datetime.timedelta` (seconds since midnight), not
+			# a full datetime. The previous code (`now - get_datetime(...)`,
+			# and frappe.utils.time_diff_in_seconds, which does the same
+			# thing internally) assumed a full datetime and broke: when one
+			# operand of a `-` is already a timedelta, `datetime -
+			# timedelta` returns a *datetime*, not a timedelta, so the
+			# `.total_seconds()` call on the result raised AttributeError.
+			# Fix: compare against "now" expressed the same way (seconds
+			# since midnight today), so both sides of the subtraction are
+			# real timedeltas.
+			now_since_midnight = now - _datetime.combine(now.date(), _datetime.min.time())
+			if isinstance(t.latest_invoice_time, _datetime):
+				latest_invoice_time = t.latest_invoice_time - _datetime.combine(
+					t.latest_invoice_time.date(), _datetime.min.time()
+				)
+			else:
+				latest_invoice_time = t.latest_invoice_time
+			delta = now_since_midnight - latest_invoice_time
+			if delta.total_seconds() < 0:
+				# Order was placed before midnight and it's now past
+				# midnight -- add a day so this still reads as "elapsed",
+				# not a negative/nonsensical value.
+				delta += _timedelta(days=1)
+			minutes = int(delta.total_seconds() // 60)
 
 		invoice = frappe.db.sql(
 			"""
@@ -65,8 +94,21 @@ def get_service_line(branch=None):
 	return result
 
 
+def _bin_actual_qty(item_code, warehouse=None):
+	"""Total Bin actual_qty for an item, optionally scoped to one warehouse.
+
+	Uses get_all + Python sum (valid on Frappe v15 and v16; v16 rejects
+	aggregate expressions as get_value/get_all fields).
+	"""
+	filters = {"item_code": item_code}
+	if warehouse:
+		filters["warehouse"] = warehouse
+	return float(sum(frappe.get_all("Bin", filters=filters, pluck="actual_qty")))
+
+
 @frappe.whitelist(methods=["GET"])
 def get_running_low(branch=None):
+	require_manager()
 	cache_key = f"ury_dashboard_running_low:{branch}"
 	cached = frappe.cache().get_value(cache_key)
 	if cached:
@@ -104,10 +146,7 @@ def get_running_low(branch=None):
 
 	result = []
 	for row in sold_rows:
-		bin_filters = {"item_code": row.item_code}
-		if warehouse:
-			bin_filters["warehouse"] = warehouse
-		actual_qty = frappe.db.get_value("Bin", bin_filters, "sum(actual_qty)") or 0
+		actual_qty = _bin_actual_qty(row.item_code, warehouse)
 
 		data_quality_issue = actual_qty < 0
 		remaining = max(actual_qty, 0)

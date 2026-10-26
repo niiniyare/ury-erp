@@ -1,0 +1,479 @@
+"""Yield variance tracking and reporting.
+
+Provides API endpoints for recording and querying actual yield measurements
+against standard yield percentages from Item.custom_yield_percent. Yield checks
+are captured at point of production and compared against the standard to
+measure and track efficiency/losses.
+
+Permission gating varies by endpoint:
+- record_yield_check: requires frappe.has_permission("create") + _require_scope (staff-facing)
+- get_yield_variance, get_yield_check_compliance: require_manager() + _require_scope (reporting)
+- update_yield_standards: require_manager() (costing-grade control, manager-only write)
+"""
+
+import hashlib
+from datetime import datetime, timedelta
+
+import frappe
+from frappe import _
+from frappe.utils import cint, flt, getdate
+
+from ury.ury.report_api.utils import require_manager, user_has_branch_access
+from ury.ury.services.yield_branch_scope import branch_item_codes
+
+
+YIELD_CHECK_DOCTYPE = "URY Yield Check"
+
+
+@frappe.whitelist()
+def record_yield_check(item, branch, company, input_qty, output_qty, stock_uom,
+					   check_type, issue_authorization=None, department=None,
+					   production_unit=None):
+	"""Record a yield check measurement.
+
+	Creates and inserts a URY Yield Check document with the given fields.
+	Automatically captures the Item's current custom_yield_percent as a snapshot
+	at save time, and computes actual_yield_percent and variance_percent.
+
+	All user inputs are validated in the document's validate() method.
+
+	Args:
+		item: Item code (Link → Item, required)
+		branch: Branch name (Link → Branch, required)
+		company: Company name (Link → Company, required)
+		input_qty: Input quantity (Float, required)
+		output_qty: Output quantity (Float, required)
+		stock_uom: Unit of Measure (Link → UOM, required)
+		check_type: Check type (Select: Routine/Scheduled/Spot-Check/Manual, required)
+		issue_authorization: Issue Authorization name (Link, optional)
+		department: Department name (Link → URY Production Department, optional)
+		production_unit: Production Unit name (Link → URY Production Unit, optional)
+
+	Returns:
+		dict with created document name and key fields
+
+	Raises:
+		frappe.ValidationError if any validation fails in the document's validate()
+	"""
+	# I7: Relaxed from manager-only to any authenticated user with doctype create permission
+	# This function is called from prep-staff-facing frontend action (Log Usable Output drawer)
+	# not a manager-only workflow; use lighter permission check consistent with ury_issue_authorization pattern
+	if not frappe.has_permission(YIELD_CHECK_DOCTYPE, "create"):
+		frappe.throw(_("Not permitted to create Yield Check"), frappe.PermissionError)
+	_require_scope(company)
+	if not user_has_branch_access(frappe.session.user, branch):
+		frappe.throw(
+			_("You are not assigned to branch {0}").format(branch),
+			frappe.PermissionError,
+		)
+
+	doc = frappe.get_doc({
+		"doctype": YIELD_CHECK_DOCTYPE,
+		"item": item,
+		"branch": branch,
+		"company": company,
+		"input_qty": input_qty,
+		"output_qty": output_qty,
+		"stock_uom": stock_uom,
+		"check_type": check_type,
+		"issue_authorization": issue_authorization,
+		"department": department,
+		"production_unit": production_unit,
+		"checked_by": frappe.session.user,
+		"checked_on": frappe.utils.now(),
+	})
+	doc.insert(ignore_permissions=False)
+
+	return {
+		"name": doc.name,
+		"item": doc.item,
+		"branch": doc.branch,
+		"company": doc.company,
+		"actual_yield_percent": doc.actual_yield_percent,
+		"standard_yield_percent_snapshot": doc.standard_yield_percent_snapshot,
+		"variance_percent": doc.variance_percent,
+		"check_type": doc.check_type,
+		"checked_on": doc.checked_on,
+	}
+
+
+YIELD_STANDARD_CADENCE_OPTIONS = {"None", "Every Issue", "Interval", "Sampled"}
+
+
+@frappe.whitelist()
+def update_yield_standards(item, custom_yield_tracked=None, custom_yield_percent=None,
+							custom_yield_check_cadence=None, custom_yield_check_interval_days=None):
+	"""Update an Item's yield-standard fields (manager-gated).
+
+	These four fields drive costing-grade behaviour -- changing them
+	silently re-back-calculates every BOM that uses the item on its next
+	save, and shifts every future Yield Check's variance baseline -- so
+	this is a real permission boundary, not just a UI nicety. The fields
+	are `permlevel: 0` in the fixture (any Item-write role can edit them
+	directly), so the frontend must never call frappe.client.set_value
+	for them; it must go through this whitelisted, require_manager()-gated
+	setter instead.
+
+	Args:
+		item: Item code (Link -> Item, required)
+		custom_yield_tracked: 0/1, whether yield is tracked for this item
+		custom_yield_percent: standard yield percent (0-100)
+		custom_yield_check_cadence: "None" | "Every Issue" | "Interval" | "Sampled"
+		custom_yield_check_interval_days: interval in days, only meaningful
+			when cadence == "Interval"
+
+	Returns:
+		dict with the item and the fields as saved
+
+	Raises:
+		frappe.PermissionError if the caller is not a manager
+		frappe.ValidationError if item is missing/invalid or field values are out of range
+	"""
+	require_manager()
+
+	if not item:
+		frappe.throw(_("Item is required"), frappe.ValidationError)
+	if not frappe.db.exists("Item", item):
+		frappe.throw(_("Item {0} does not exist").format(item), frappe.ValidationError)
+
+	values = {}
+
+	if custom_yield_tracked is not None:
+		values["custom_yield_tracked"] = 1 if cint(custom_yield_tracked) else 0
+
+	if custom_yield_percent is not None:
+		percent = flt(custom_yield_percent)
+		if percent < 0 or percent > 100:
+			frappe.throw(_("Yield Percent must be between 0 and 100"), frappe.ValidationError)
+		values["custom_yield_percent"] = percent
+
+	if custom_yield_check_cadence is not None:
+		if custom_yield_check_cadence not in YIELD_STANDARD_CADENCE_OPTIONS:
+			frappe.throw(_("Invalid Yield Check Cadence: {0}").format(custom_yield_check_cadence),
+						 frappe.ValidationError)
+		values["custom_yield_check_cadence"] = custom_yield_check_cadence
+
+	if custom_yield_check_interval_days is not None:
+		values["custom_yield_check_interval_days"] = cint(custom_yield_check_interval_days)
+
+	if not values:
+		frappe.throw(_("No yield standard fields provided to update"), frappe.ValidationError)
+
+	doc = frappe.get_doc("Item", item)
+	for fieldname, value in values.items():
+		doc.set(fieldname, value)
+	doc.save(ignore_permissions=False)
+
+	return {
+		"item": doc.name,
+		"custom_yield_tracked": doc.custom_yield_tracked,
+		"custom_yield_percent": doc.custom_yield_percent,
+		"custom_yield_check_cadence": doc.custom_yield_check_cadence,
+		"custom_yield_check_interval_days": doc.custom_yield_check_interval_days,
+	}
+
+
+@frappe.whitelist()
+def get_yield_variance(company, branch=None, item=None):
+	"""Retrieve yield check records with variance data.
+
+	Returns a list of URY Yield Check documents filtered by company (required)
+	and optionally by branch and item. Results are sorted by checked_on descending
+	(most recent first) and limited to 200 records.
+
+	Args:
+		company: Company name (required, scoped)
+		branch: Branch name (optional filter)
+		item: Item code (optional filter)
+
+	Returns:
+		list of dicts with yield check data:
+		[
+			{
+				"name": "<check-id>",
+				"item": "<item-code>",
+				"branch": "<branch-name>",
+				"actual_yield_percent": <float>,
+				"standard_yield_percent_snapshot": <float>,
+				"variance_percent": <float>,
+				"checked_on": "<datetime>",
+			},
+			...
+		]
+	"""
+	# F7: this is a manager-gated reporting endpoint. It intentionally
+	# relies on require_manager() + _require_scope(company) only, not
+	# user_has_branch_access -- same deliberate choice documented on
+	# user_has_branch_access in report_api/utils.py and on
+	# get_due_yield_checks in yield_check_reminders.py: managers may
+	# report across branches they oversee even without a Branch.user row.
+	# user_has_branch_access remains reserved for staff-facing WRITE
+	# endpoints (record_yield_check above, create_issue_authorization)
+	# that accept a caller-supplied branch.
+	require_manager()
+	_require_scope(company)
+
+	filters = {"company": company}
+	if branch:
+		filters["branch"] = branch
+	if item:
+		filters["item"] = item
+
+	records = frappe.get_all(
+		YIELD_CHECK_DOCTYPE,
+		filters=filters,
+		fields=[
+			"name",
+			"item",
+			"branch",
+			"actual_yield_percent",
+			"standard_yield_percent_snapshot",
+			"variance_percent",
+			"checked_on",
+		],
+		order_by="checked_on desc",
+		limit_page_length=200,
+	)
+
+	return records
+
+
+@frappe.whitelist()
+def get_yield_check_compliance(company, branch=None):
+	"""Compute yield check compliance metrics by cadence mode.
+
+	For each yield-tracked item with cadence != 'None', computes required vs
+	completed checks over the last 30 days. Returns compliance percentage and
+	attached vs standalone check count for data-quality signaling.
+
+	IMPORTANT — compliance_basis: "authorization". For the "Every Issue"
+	cadence, `required_count` counts URY Issue Authorization records with
+	status = "Authorized"; it does NOT know whether that authorization was
+	ever physically issued, was later cancelled, or was only partially used.
+	This is authorization-based compliance (did every Authorized record get a
+	check), not production-based compliance (did every actual physical issue
+	get a check). A real production-based fix needs a new field on URY Issue
+	Authorization recording confirmed physical issuance, which is out of
+	scope here — until that lands, treat these numbers as an upper bound on
+	true non-compliance, not an exact measure.
+
+	IMPORTANT — `required_count == 0` means NOT MEASURABLE, not compliant.
+	`compliance_percent` is `None` (JSON `null`) for those rows, and callers
+	must render them as "N/A" and EXCLUDE them from any average/aggregate
+	compliance score. `required_count == 0` is a normal, common state, not a
+	rare edge case: an "Interval" item with no `interval_days` set, an "Every
+	Issue" item with zero authorized issues in the last 30 days (i.e. the
+	ingredient simply wasn't used), and a "Sampled" item the deterministic
+	sampler didn't pick this month all land here. Reporting 100% for those
+	rows (the behavior shipped before TRACK.md F9's decision) rendered the
+	single most common row on the Compliance dashboard as a green "fully
+	compliant" even though nothing was ever checked — inverting the whole
+	purpose of the page, which is to make gaps in checking visible. Only rows
+	with `required_count > 0` carry a meaningful percentage.
+
+	Args:
+		company: Company name (required, scoped)
+		branch: Branch name (optional filter; if None, aggregates all branches)
+
+	Returns:
+		list of dicts with compliance data:
+		[
+			{
+				"item": "<item-code>",
+				"cadence": "Every Issue" | "Interval" | "Sampled",
+				"required_count": <int>,
+				"completed_count": <int>,
+				"compliance_percent": <float> | None,  # None when required_count == 0
+				"attached_count": <int>,  # checks with issue_authorization set
+				"compliance_basis": "authorization",  # see docstring above
+			},
+			...
+		]
+	"""
+	# F7: this is a manager-gated reporting endpoint. It intentionally
+	# relies on require_manager() + _require_scope(company) only, not
+	# user_has_branch_access -- same deliberate choice documented on
+	# user_has_branch_access in report_api/utils.py and on
+	# get_due_yield_checks in yield_check_reminders.py: managers may
+	# report across branches they oversee even without a Branch.user row.
+	# user_has_branch_access remains reserved for staff-facing WRITE
+	# endpoints (record_yield_check above, create_issue_authorization)
+	# that accept a caller-supplied branch. F8 below is a separate,
+	# unrelated concern: it scopes the tracked-item SET to the items
+	# configured for production at the given branch.
+	require_manager()
+	_require_scope(company)
+
+	item_filters = {
+		"custom_yield_tracked": 1,
+		"custom_yield_check_cadence": ["!=", "None"],
+	}
+
+	# F8 (corrected): when a single branch is requested, scope the
+	# tracked-item set to items actually used at that branch. IPC only has
+	# rows for sellable menu items (kitchen/bar routing) — never a raw
+	# ingredient — and yield tracking only ever applies to raw ingredients
+	# (see docs/yield-tracking.md, "Why Item, not BOM Item or IPC"), so the
+	# anchor is: active IPC rows for this branch -> their BOM -> that BOM's
+	# component items (BOM Item rows). See
+	# ury.ury.services.yield_branch_scope.branch_item_codes. When branch is
+	# None (all-branches aggregate), keep the global item set — the numbers
+	# are already summed across every branch, so per-branch scoping doesn't
+	# apply.
+	scoped_item_codes = branch_item_codes(branch)
+	if scoped_item_codes is not None:
+		if not scoped_item_codes:
+			return []
+		item_filters["name"] = ["in", list(scoped_item_codes)]
+
+	# Fetch yield-tracked items with cadence != None (scoped to branch above, if given).
+	tracked_items = frappe.get_all(
+		"Item",
+		filters=item_filters,
+		fields=[
+			"name",
+			"custom_yield_check_cadence",
+			"custom_yield_check_interval_days",
+		],
+	)
+
+	compliance_data = []
+	today = getdate()
+	start_date = today - timedelta(days=30)
+
+	for item in tracked_items:
+		item_code = item.name
+		cadence = item.custom_yield_check_cadence
+
+		# Fetch completed checks for this item in the last 30 days.
+		# I1: Use "between" filter to avoid duplicate dict keys silently dropping the start_date bound
+		completed_checks = frappe.get_all(
+			YIELD_CHECK_DOCTYPE,
+			filters={
+				"company": company,
+				"item": item_code,
+				"checked_on": ["between", [start_date, today + timedelta(days=1)]],
+			} if branch is None else {
+				"company": company,
+				"branch": branch,
+				"item": item_code,
+				"checked_on": ["between", [start_date, today + timedelta(days=1)]],
+			},
+			fields=["name", "issue_authorization", "checked_on"],
+		)
+
+		completed_count = len(completed_checks)
+		attached_count = sum(1 for check in completed_checks if check.issue_authorization)
+
+		required_count = 0
+		if cadence == "Every Issue":
+			# Count authorized issues without a corresponding yield check.
+			# I2: Add 30-day window to authorizations to match the 30-day numerator (completed checks)
+			authorized_issues = frappe.get_all(
+				"URY Issue Authorization",
+				filters={
+					"component_item": item_code,
+					"status": "Authorized",
+					"creation": ["between", [start_date, today + timedelta(days=1)]],
+				} if branch is None else {
+					"component_item": item_code,
+					"branch": branch,
+					"status": "Authorized",
+					"creation": ["between", [start_date, today + timedelta(days=1)]],
+				},
+				fields=["name"],
+			)
+			required_count = len(authorized_issues)
+
+		elif cadence == "Interval":
+			# Compute periods elapsed in the last 30 days.
+			# I5: Match cadence engine semantics — when interval_days <= 0, skip this item (not due)
+			interval_days = item.custom_yield_check_interval_days
+			if interval_days and interval_days > 0:
+				required_count = max(1, 30 // interval_days)
+			else:
+				# Skip items with unset or non-positive intervals (not due per engine logic)
+				required_count = 0
+
+		elif cadence == "Sampled":
+			# Count days in the last 30 where the deterministic hash picked this item.
+			required_count = _count_sampled_days(start_date, today, branch, item_code)
+
+		# TRACK.md F9 decision: nothing was required, so compliance is NOT
+		# MEASURABLE for this row -- not 100%. Emitting None (JSON null)
+		# keeps these rows out of any average and lets the dashboard render
+		# an honest "N/A" instead of a reassuring green 100%.
+		compliance_percent = (
+			round(completed_count / required_count * 100, 2)
+			if required_count > 0
+			else None
+		)
+
+		compliance_data.append({
+			"item": item_code,
+			"cadence": cadence,
+			"required_count": required_count,
+			"completed_count": completed_count,
+			"compliance_percent": compliance_percent,
+			"attached_count": attached_count,
+			"compliance_basis": "authorization",
+		})
+
+	return compliance_data
+
+
+# --- internal helpers -------------------------------------------------------
+
+
+def _count_sampled_days(start_date, end_date, branch, item_code):
+	"""Count days in [start_date, end_date) where item_code is sampled.
+
+	Uses the same deterministic hash logic as yield_check_reminders.py's
+	_evaluate_sampled (sampling rate 10%).
+
+	Args:
+		start_date: datetime.date
+		end_date: datetime.date
+		branch: Branch name (optional; if None, sums across all real branches)
+		item_code: Item code
+
+	Returns:
+		int: number of days where the item was sampled
+	"""
+	SAMPLING_RATE = 0.10
+
+	# I11: When branch is None (all-branches aggregate), sum per-branch counts
+	# using actual branch names, not a fake "all" placeholder that the cadence engine never uses
+	if branch is None:
+		# Get all branches and sum sampled days for each
+		branches = frappe.get_all("Branch", pluck="name")
+		total_count = 0
+		for branch_name in branches:
+			total_count += _count_sampled_days(start_date, end_date, branch_name, item_code)
+		return total_count
+
+	# Single branch case: count sampled days using actual branch name
+	count = 0
+	current_date = start_date
+
+	while current_date < end_date:
+		today_str = str(current_date)
+		hash_input = f"{today_str}:{branch}:{item_code}"
+		hash_value = hashlib.md5(hash_input.encode()).hexdigest()
+		hash_int = int(hash_value[:8], 16)
+		normalized_hash = (hash_int % 1000000) / 1000000.0
+
+		if normalized_hash < SAMPLING_RATE:
+			count += 1
+
+		current_date += timedelta(days=1)
+
+	return count
+
+
+def _require_scope(company):
+	"""Fail closed if company scope is missing, matching the established pattern."""
+	if not company:
+		frappe.throw(_("Company is required"), frappe.ValidationError)
+
+

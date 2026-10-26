@@ -1,5 +1,6 @@
 {
  "actions": [],
+ "allow_bulk_edit": 1,
  "allow_rename": 1,
  "autoname": "field:production",
  "creation": "2023-09-27 12:18:07.130899",
@@ -8,11 +9,24 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
-  "production",
+  "tab_general",
+  "enabled",
   "pos_profile",
   "branch",
+  "column_break_yphx",
+  "production",
+  "department",
   "warehouse",
+  "section_break_doeo",
   "item_groups",
+  "tab_2_tab",
+  "workstation",
+  "workstation_type",
+  "column_break_ebgt",
+  "lead_chef",
+  "section_break_rkua",
+  "assigned_employees",
+  "tab_devices",
   "printer_info_section",
   "printer_settings",
   "section_break_sevj",
@@ -33,20 +47,16 @@
    "options": "POS Profile"
   },
   {
-   "fetch_from": "pos_profile.branch",
    "fieldname": "branch",
    "fieldtype": "Link",
    "label": "Branch",
-   "options": "Branch",
-   "read_only": 1
+   "options": "Branch"
   },
   {
-   "fetch_from": "pos_profile.warehouse",
    "fieldname": "warehouse",
    "fieldtype": "Link",
    "label": "Warehouse",
-   "options": "Warehouse",
-   "read_only": 1
+   "options": "Warehouse"
   },
   {
    "fieldname": "item_groups",
@@ -84,11 +94,83 @@
    "fieldtype": "Table",
    "label": "Order Type",
    "options": "KDS Order Type"
+  },
+  {
+   "default": "1",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled"
+  },
+  {
+   "fieldname": "department",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Department",
+   "options": "URY Production Department",
+   "reqd": 1
+  },
+  {
+   "description": "Actively scopes KOT (kitchen order ticket) visibility to this unit's chef. Distinct from 'Department Manager' on URY Production Department, which is informational only and not currently enforced by any access logic.",
+   "fieldname": "lead_chef",
+   "fieldtype": "Link",
+   "label": "Lead Chef",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "assigned_employees",
+   "fieldtype": "Table",
+   "label": "Assigned Employees",
+   "options": "URY Production Unit Employee"
+  },
+  {
+   "fieldname": "workstation",
+   "fieldtype": "Link",
+   "label": "Workstation",
+   "options": "Workstation"
+  },
+  {
+   "fieldname": "workstation_type",
+   "fieldtype": "Link",
+   "label": "Workstation Type",
+   "options": "Workstation Type"
+  },
+  {
+   "fieldname": "column_break_yphx",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "section_break_doeo",
+   "fieldtype": "Section Break",
+   "label": "Item Groups"
+  },
+  {
+   "fieldname": "tab_2_tab",
+   "fieldtype": "Tab Break",
+   "label": "Operations"
+  },
+  {
+   "fieldname": "column_break_ebgt",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "section_break_rkua",
+   "fieldtype": "Section Break",
+   "label": "Staff"
+  },
+  {
+   "fieldname": "tab_general",
+   "fieldtype": "Tab Break",
+   "label": "General"
+  },
+  {
+   "fieldname": "tab_devices",
+   "fieldtype": "Tab Break",
+   "label": "Devices and KDS"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-09-02 19:25:57.113914",
+ "modified": "2026-10-22 16:00:00.000000",
  "modified_by": "Administrator",
  "module": "URY",
  "name": "URY Production Unit",
@@ -139,19 +221,6 @@
    "role": "URY Cashier",
    "select": 1,
    "share": 1
-  },
-  {
-   "create": 1,
-   "delete": 1,
-   "email": 1,
-   "export": 1,
-   "print": 1,
-   "read": 1,
-   "report": 1,
-   "role": "URY Admin",
-   "select": 1,
-   "share": 1,
-   "write": 1
   }
  ],
  "row_format": "Dynamic",

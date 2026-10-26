@@ -1,0 +1,448 @@
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  AttentionFeed,
+  Badge,
+  Card,
+  DataTable,
+  DataTableColumn,
+  DatePicker,
+  KpiStrip,
+  Page,
+  PageHeader,
+  Section,
+  Spinner,
+  numericCellClass,
+} from '@ury/ui';
+import { useBranchContext } from '../../context/BranchContext';
+import { departmentStockService, PlanComponentDemand } from '../../services/departmentStock';
+import { salesPlanService } from '../../services/salesPlan';
+
+/**
+ * Real data used here:
+ *  - `departmentStockService.getActivePlan` -> the approved/locked Sales
+ *    Plan's frozen per-component demand vector (`PlanComponentDemand[]`).
+ *    This is the only source for "Materials to issue" -- required quantity
+ *    per component/department.
+ *  - `departmentStockService.getPlanStockOnHand` -> current stock for those
+ *    same COMPONENTS, resolved to a department warehouse (or the branch POS
+ *    Profile warehouse) by `ury_requirements_stock.get_plan_stock_on_hand`.
+ *    This feeds "In store" and the KPI strip's "Covered by stock" / "Short"
+ *    / "Material value" / "To purchase". When the backend cannot resolve a
+ *    warehouse it returns `resolved_from: null`, and those figures render as
+ *    "Not available" with an honest hint rather than a fabricated zero.
+ *  - `salesPlanService.getPlan(planName)` -> the same approved plan's raw
+ *    `items` child table (item_code/qty/department/production_unit/
+ *    stock_uom) is used for "Production targets", READ-ONLY. Requirements
+ *    only ever loads a plan whose `status` is already an approved/locked
+ *    state (`getActivePlan` -- see departmentStock.ts), i.e. one that has
+ *    been submitted; a submitted Sales Plan's quantities are the
+ *    authoritative, frozen numbers production is working against, so this
+ *    page must not offer to edit them. (It previously did, via an
+ *    `InlineEditCell` that persisted to the SAME localStorage draft
+ *    mechanism `SalesPlanPage.tsx` uses for its own UNSUBMITTED drafts --
+ *    which never touched the Sales Plan document, its approval snapshot,
+ *    or any Production Plan, so it looked editable without being
+ *    authoritative. Removed rather than wired to a real update, because
+ *    there is no real update to make: change the submitted plan through
+ *    Sales Plan's own revision/supersede workflow instead.)
+ */
+
+interface RawSalesPlanItem {
+  item_code: string;
+  qty: number;
+  stock_uom?: string;
+  department?: string;
+  production_unit?: string;
+}
+
+interface RawSalesPlanDoc {
+  name: string;
+  company?: string;
+  branch?: string;
+  plan_date?: string;
+  items?: RawSalesPlanItem[];
+}
+
+interface ProductionTargetRow {
+  item_code: string;
+  qty: number;
+  stock_uom?: string;
+  department?: string;
+  production_unit?: string;
+}
+
+const getToday = () => {
+  const now = new Date();
+  const timezoneOffsetMs = now.getTimezoneOffset() * 60 * 1000;
+  return new Date(now.getTime() - timezoneOffsetMs).toISOString().slice(0, 10);
+};
+
+/**
+ * Lookup key shared by the stock request, the stock map and every consumer.
+ * Must be built the same way on both sides -- a mismatch here is what made
+ * the whole page read "Not available".
+ */
+const stockKey = (itemCode: string, department?: string | null) => `${itemCode}:${department || ''}`;
+
+const formatQty = (value: number, uom?: string) => {
+  const formatted = Number.isInteger(value) ? String(value) : value.toFixed(3);
+  return uom ? `${formatted} ${uom}` : formatted;
+};
+
+export const RequirementsPage: React.FC = () => {
+  const { activeBranchId } = useBranchContext();
+  const [requirementsDate, setRequirementsDate] = useState(getToday);
+  const [demandVector, setDemandVector] = useState<PlanComponentDemand[]>([]);
+  const [productionItems, setProductionItems] = useState<ProductionTargetRow[]>([]);
+  const [planName, setPlanName] = useState<string | null>(null);
+  const [planStatus, setPlanStatus] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [stockData, setStockData] = useState<Map<string, any>>(new Map());
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setPlanName(null);
+    setPlanStatus(null);
+    setDemandVector([]);
+    setProductionItems([]);
+
+    if (!activeBranchId || activeBranchId === 'all') {
+      // Requirements are derived from a single branch's approved Sales
+      // Plan -- there is no meaningful "all branches" view. Fail closed
+      // with an actionable message instead of calling the API.
+      setError('Select a specific branch above to view its Requirements.');
+      setLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    (async () => {
+      try {
+        const activePlan = await departmentStockService.getActivePlan(activeBranchId, requirementsDate);
+        if (cancelled) return;
+
+        if (!activePlan) {
+          setError('No approved Sales Plan found for this branch and date. Requirements are only available once a plan is approved.');
+          setLoading(false);
+          return;
+        }
+
+        setPlanName(activePlan.name);
+        setPlanStatus(activePlan.status);
+        setDemandVector(activePlan.demandVector);
+
+        const rawPlan = (await salesPlanService.getPlan(activePlan.name)) as unknown as RawSalesPlanDoc;
+        if (cancelled) return;
+
+        const items = Array.isArray(rawPlan.items) ? rawPlan.items : [];
+        setProductionItems(
+          items.map((item) => ({
+            item_code: item.item_code,
+            qty: Number(item.qty ?? 0),
+            stock_uom: item.stock_uom,
+            department: item.department,
+            production_unit: item.production_unit,
+          })),
+        );
+      } catch {
+        if (!cancelled) {
+          setError('Unable to load Requirements for this branch and date.');
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeBranchId, requirementsDate]);
+
+  // Fetch stock-on-hand for the COMPONENTS the plan requires, not for the
+  // finished goods it produces. The materials table and every KPI below key
+  // their lookups on `component_item`, so requesting stock for
+  // `productionItems` (e.g. "Chicken Biryani") could never match a demand
+  // line (e.g. "Biryani Rice") and every row rendered "Not available".
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!activeBranchId || activeBranchId === 'all' || demandVector.length === 0) {
+      setStockData(new Map());
+      return;
+    }
+
+    (async () => {
+      try {
+        // One request per distinct component/department pair -- the demand
+        // vector can repeat a component across production units.
+        const seen = new Set<string>();
+        const items: Array<{ item_code: string; department?: string }> = [];
+        demandVector.forEach((row) => {
+          const key = stockKey(row.component_item, row.department);
+          if (seen.has(key)) return;
+          seen.add(key);
+          items.push({ item_code: row.component_item, department: row.department });
+        });
+
+        const stockResults = await departmentStockService.getPlanStockOnHand(activeBranchId, items);
+        if (cancelled) return;
+
+        const stockMap = new Map();
+        stockResults.forEach((stock) => {
+          stockMap.set(stockKey(stock.item_code, stock.department), stock);
+        });
+        setStockData(stockMap);
+      } catch {
+        // If stock fetch fails, continue with empty stock data so page still renders
+        setStockData(new Map());
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeBranchId, demandVector]);
+
+  const departmentCount = useMemo(
+    () => new Set(demandVector.map((row) => row.department).filter(Boolean)).size,
+    [demandVector],
+  );
+
+  // Compute KPI values from stock data and demand vector
+  const kpiMetrics = useMemo(() => {
+    let materialValue = 0;
+    let coveredByStock = 0;
+    let short = 0;
+    let toPurchase = 0;
+    let totalRequired = 0;
+    let hasUnresolvedWarehouse = false;
+
+    demandVector.forEach((row) => {
+      const stock = stockData.get(stockKey(row.component_item, row.department));
+
+      // Material value: sum of (required_qty * valuation_rate) for all items
+      if (stock && stock.resolved_from !== null && stock.valuation_rate !== null) {
+        materialValue += (row.required_qty || 0) * (stock.valuation_rate || 0);
+      } else if (!stock) {
+        // If no stock data returned at all, warehouse couldn't be resolved
+        hasUnresolvedWarehouse = true;
+      }
+
+      // Covered by stock: sum of actual stock that meets requirement
+      // Short: sum of unmet required_qty
+      if (stock && stock.resolved_from !== null && stock.allocatable_qty !== null) {
+        coveredByStock += Math.min(stock.allocatable_qty, row.required_qty || 0);
+        short += Math.max(0, (row.required_qty || 0) - (stock.allocatable_qty || 0));
+
+        // To purchase: sum of (short_qty * valuation_rate)
+        const shortQty = Math.max(0, (row.required_qty || 0) - (stock.allocatable_qty || 0));
+        toPurchase += shortQty * (stock.valuation_rate || 0);
+      } else if (!stock) {
+        hasUnresolvedWarehouse = true;
+      }
+
+      totalRequired += row.required_qty || 0;
+    });
+
+    return {
+      materialValue: materialValue.toFixed(2),
+      coveredByStock: totalRequired > 0 ? ((coveredByStock / totalRequired) * 100).toFixed(1) : '0.0',
+      short: short.toFixed(3),
+      toPurchase: toPurchase.toFixed(2),
+      hasUnresolvedWarehouse,
+    };
+  }, [demandVector, stockData]);
+
+  const materialsColumns: DataTableColumn<PlanComponentDemand>[] = [
+    { key: 'component_item', header: 'Material', render: (row) => (
+      <div>
+        <p className="font-semibold text-foreground">{row.component_item_name || row.component_item}</p>
+        <p className="mt-0.5 text-xs text-text-tertiary">{row.component_item}</p>
+      </div>
+    ) },
+    { key: 'department', header: 'Department', render: (row) => row.department || '—' },
+    {
+      key: 'required_qty',
+      header: 'Required',
+      align: 'right',
+      render: (row) => <span className={numericCellClass}>{formatQty(row.required_qty, row.stock_uom)}</span>,
+    },
+    {
+      key: 'in_store',
+      header: 'In store',
+      align: 'right',
+      render: (row) => {
+        const stock = stockData.get(stockKey(row.component_item, row.department));
+
+        // If no stock data found or resolved_from is null, warehouse couldn't be resolved
+        if (!stock || stock.resolved_from === null) {
+          return (
+            <Badge variant="secondary" size="sm" title="No warehouse configured for this branch/department">
+              Not available
+            </Badge>
+          );
+        }
+
+        // Show warning if allocatable_qty is negative (data quality issue)
+        if (stock.allocatable_qty !== null && stock.allocatable_qty < 0) {
+          return (
+            <div className="flex items-center gap-2">
+              <span className={numericCellClass}>{formatQty(stock.allocatable_qty, row.stock_uom)}</span>
+              <span title="Negative stock indicates data quality issue">⚠️</span>
+            </div>
+          );
+        }
+
+        // Show the allocatable quantity
+        if (stock.allocatable_qty !== null) {
+          return <span className={numericCellClass}>{formatQty(stock.allocatable_qty, row.stock_uom)}</span>;
+        }
+
+        // Fallback to "Not available" if we somehow have stock data but no allocatable_qty
+        return (
+          <Badge variant="secondary" size="sm" title="Stock quantity unavailable">
+            Not available
+          </Badge>
+        );
+      },
+    },
+  ];
+
+  const productionColumns: DataTableColumn<ProductionTargetRow>[] = [
+    { key: 'item_code', header: 'Item', render: (row) => <span className="font-semibold text-foreground">{row.item_code}</span> },
+    {
+      key: 'department',
+      header: 'Department',
+      render: (row) => [row.department, row.production_unit].filter(Boolean).join(' · ') || '—',
+    },
+    {
+      key: 'qty',
+      header: 'Quantity',
+      align: 'right',
+      // Read-only: this is a submitted Sales Plan's frozen quantity, not a
+      // draft -- see the module docstring above for why an editor was
+      // removed rather than wired to a real update.
+      render: (row) => <span className={numericCellClass}>{formatQty(row.qty, row.stock_uom)}</span>,
+    },
+  ];
+
+  return (
+    <Page>
+      <PageHeader
+        bleed
+        title="Requirements"
+        description={
+          <p className="mt-1 text-sm text-text-tertiary">
+            Materials and production targets derived from the approved Sales Plan.
+            {planName && (
+              <span className="ml-1 text-text-tertiary">
+                Plan {planName}{planStatus ? ` · ${planStatus}` : ''}
+              </span>
+            )}
+          </p>
+        }
+        actions={
+          <DatePicker
+            id="requirements-date"
+            aria-label="Requirements date"
+            value={requirementsDate}
+            onChange={(_id, next) => setRequirementsDate(next)}
+            className="w-[180px]"
+          />
+        }
+      />
+
+      {loading ? (
+        <Section>
+          <div className="flex items-center justify-center rounded-lg border border-border bg-card py-16">
+            <Spinner className="h-8 w-8 text-primary" />
+          </div>
+        </Section>
+      ) : error ? (
+        <Section>
+          <Card className="border-destructive-tint-border bg-destructive-tint p-6 text-sm text-destructive">{error}</Card>
+        </Section>
+      ) : (
+        <>
+          <Section>
+            <KpiStrip
+            items={[
+              {
+                label: 'Material value',
+                value: kpiMetrics.hasUnresolvedWarehouse ? 'Not available' : `${kpiMetrics.materialValue}`,
+                hint: kpiMetrics.hasUnresolvedWarehouse ? 'Some items have no warehouse configured' : 'Sum of required qty × valuation rate',
+              },
+              {
+                label: 'Covered by stock',
+                value: kpiMetrics.hasUnresolvedWarehouse ? 'Not available' : `${kpiMetrics.coveredByStock}%`,
+                hint: kpiMetrics.hasUnresolvedWarehouse ? 'Some items have no warehouse configured' : 'Percentage of demand covered by allocatable stock',
+              },
+              {
+                label: 'Short',
+                value: kpiMetrics.hasUnresolvedWarehouse ? 'Not available' : kpiMetrics.short,
+                hint: kpiMetrics.hasUnresolvedWarehouse ? 'Some items have no warehouse configured' : 'Total quantity short after allocating available stock',
+              },
+              {
+                label: 'To purchase',
+                value: kpiMetrics.hasUnresolvedWarehouse ? 'Not available' : `${kpiMetrics.toPurchase}`,
+                hint: kpiMetrics.hasUnresolvedWarehouse ? 'Some items have no warehouse configured' : 'Cost of items short (short qty × valuation rate)',
+              },
+            ]}
+            />
+          </Section>
+
+          <Section>
+            <AttentionFeed
+            title="Shortfalls"
+            items={kpiMetrics.hasUnresolvedWarehouse ? [
+              {
+                severity: 'warning',
+                title: 'Some items have no warehouse configured',
+                detail: `This branch or some departments are missing warehouse configuration, so stock-on-hand data cannot be resolved for those items. Configure a POS Profile warehouse for this branch and/or department warehouses for your production departments to enable full stock tracking.`,
+              },
+            ] : [
+              {
+                severity: 'info',
+                title: 'Stock-on-hand tracking enabled',
+                detail: `Real-time stock data is available for all items. Review the materials below to identify any shortages and create purchase orders as needed.`,
+              },
+            ]}
+            />
+          </Section>
+
+          <Section>
+            <div>
+            <h2 className="mb-2 text-sm font-semibold tracking-wide text-muted-foreground">
+              Materials to issue <span className="ml-1 text-xs font-normal text-text-tertiary">{demandVector.length} lines</span>
+            </h2>
+            <DataTable
+              columns={materialsColumns}
+              rows={demandVector}
+              emptyMessage="No component demand recorded on this plan yet."
+            />
+            </div>
+          </Section>
+
+          <Section>
+            <div>
+            <h2 className="mb-2 text-sm font-semibold tracking-wide text-muted-foreground">
+              Production targets <span className="ml-1 text-xs font-normal text-text-tertiary">{productionItems.length} items</span>
+            </h2>
+            <DataTable
+              columns={productionColumns}
+              rows={productionItems}
+              emptyMessage="No items recorded on this plan yet."
+            />
+            </div>
+          </Section>
+        </>
+      )}
+    </Page>
+  );
+};
+
+export default RequirementsPage;

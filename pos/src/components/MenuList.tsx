@@ -4,6 +4,7 @@ import MenuCard from './MenuCard';
 import { Spinner } from '@ury/ui';
 import { cn } from '@ury/ui';
 import { t } from '../i18n';
+import { useMenuAvailability, sortMenuItemsByAvailability } from '../lib/use-menu-availability';
 
 interface MenuListProps {
   onItemClick: (item: any) => void;
@@ -19,15 +20,22 @@ const MenuList: React.FC<MenuListProps> = ({ onItemClick }) => {
     quickFilter,
     fetchMenuItems,
     isMenuInteractionDisabled,
-    isOrderInteractionDisabled
+    isOrderInteractionDisabled,
+    posProfile
   } = usePOSStore();
 
   useEffect(() => {
     fetchMenuItems();
   }, [fetchMenuItems]);
 
+  const { availabilityMap } = useMenuAvailability(
+    menuItems,
+    posProfile?.branch,
+    posProfile?.company
+  );
+
   const filteredItems = useMemo(() => {
-    return menuItems.filter(item => {
+    const filtered = menuItems.filter(item => {
       const searchTerm = searchQuery.toLowerCase();
       const matchesCategory = !selectedCategory || item.course === selectedCategory;
       const matchesSearch = !searchQuery || 
@@ -38,12 +46,14 @@ const MenuList: React.FC<MenuListProps> = ({ onItemClick }) => {
       
       return matchesCategory && matchesSearch && matchesFilter;
     });
-  }, [menuItems, selectedCategory, searchQuery, quickFilter]);
+
+    return sortMenuItemsByAvailability(filtered, availabilityMap);
+  }, [menuItems, selectedCategory, searchQuery, quickFilter, availabilityMap]);
 
   const isInteractionDisabled = isMenuInteractionDisabled() || isOrderInteractionDisabled();
 
   return (
-    <div className="flex-1 overflow-auto bg-gray-50">
+    <div className="flex-1 overflow-auto bg-gray-50 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
       <div className="max-w-screen-xl mx-auto p-4 pb-40">
         {menuLoading ? (
           <div className="h-96">
@@ -79,6 +89,9 @@ const MenuList: React.FC<MenuListProps> = ({ onItemClick }) => {
                 item={item.item}
                 onClick={() => onItemClick(item)}
                 disabled={isInteractionDisabled}
+                branch={posProfile?.branch}
+                company={posProfile?.company}
+                availability={availabilityMap[item.item]}
               />
             ))}
           </div>

@@ -1,14 +1,14 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Trash2, Edit, FrownIcon, Plus, Loader2, MessageSquare } from 'lucide-react';
 import { usePOSStore } from '../store/pos-store';
 import { cn } from '@ury/ui';
-import { formatCurrency, parseFrappeError, flt } from '@ury/core';
+import { formatCurrency, parseFrappeError } from '@ury/core';
 import { CustomerSelect } from './CustomerSelect';
 import ProductDialog from './ProductDialog';
 import OrderTypeSelect from './OrderTypeSelect';
 import CommentDialog from './CommentDialog';
-import OrderTabs from './OrderTabs';
-import { Button } from '@ury/ui';
+import { Button, Badge } from '@ury/ui';
+import { getOrderKotStatus, type KotItemState } from '../lib/kot-status-api';
 import { Spinner } from '@ury/ui';
 import { syncOrder } from '../lib/order-api';
 import { useRootStore } from '../store/root-store';
@@ -16,6 +16,14 @@ import type { RootState } from '../store/root-store';
 import { showToast } from '@ury/ui';
 import { DINE_IN } from '../data/order-types';
 import { t } from '../i18n';
+import { useCartAvailability, cartQtyForItem, remainingHeadroom } from '../lib/cart-capacity';
+
+const KOT_BADGE: Record<KotItemState, { label: string; variant: 'cancelled' | 'warning' | 'info' | 'success' }> = {
+  QUEUED: { label: 'Sent', variant: 'cancelled' },
+  IN_PREPARATION: { label: 'Preparing', variant: 'warning' },
+  READY: { label: 'Ready', variant: 'info' },
+  SERVED: { label: 'Served', variant: 'success' },
+};
 
 const OrderPanel = () => {
   const { 
@@ -47,18 +55,44 @@ const OrderPanel = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showCommentDialog, setShowCommentDialog] = useState(false);
 
+  // B04: real-time cart capacity headroom, keyed by item_code. Display-only
+  // (see cart-capacity.ts docstring) -- sync_order remains the sole
+  // transactional authority against oversell.
+  const { availabilityByItem } = useCartAvailability({
+    itemCodes: activeOrders.map((item) => item.item),
+    branch: posProfile?.branch,
+    company: posProfile?.company,
+  });
+
+  // Read-only kitchen state per item_code for a running (saved) order.
+  const [kotState, setKotState] = useState<Record<string, KotItemState>>({});
+  useEffect(() => {
+    if (!orderId) {
+      setKotState({});
+      return;
+    }
+    let cancelled = false;
+    const load = () =>
+      getOrderKotStatus(orderId)
+        .then((r) => !cancelled && setKotState(r.items))
+        .catch(() => {});
+    load();
+    const timer = setInterval(load, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [orderId, lastModifiedTime]);
+
   const calculateItemTotal = (item: typeof activeOrders[0]) => {
     const basePrice = item.selectedVariant?.price || item.price;
     const addonsTotal = item.selectedAddons?.reduce((sum, addon) => sum + addon.price, 0) || 0;
-    return flt((basePrice + addonsTotal) * item.quantity, 2);
+    return (basePrice + addonsTotal) * item.quantity;
   };
 
-  const total = flt(
-    activeOrders.reduce(
-      (sum, item) => sum + calculateItemTotal(item),
-      0
-    ),
-    2
+  const total = activeOrders.reduce(
+    (sum, item) => sum + calculateItemTotal(item),
+    0
   );
 
   const handleEdit = (item: typeof activeOrders[0]) => {
@@ -110,7 +144,12 @@ const OrderPanel = () => {
           item_name: item.name,
           rate: item.selectedVariant?.price || item.price,
           qty: item.quantity,
-          comment: item.comment || undefined
+          comment: item.comment || undefined,
+          // Stable line identity — without it the server cannot tell a
+          // quantity change on an existing line from a remove + re-add, and
+          // a 1 -> 2 bump cancels the original KOT and re-fires a full one
+          // instead of raising a +1 delta (B02b).
+          reservation_line_key: item.reservationLineKey || item.uniqueId,
         })),
         no_of_pax: noOfPax,
         pos_profile: posProfile.name,
@@ -195,9 +234,8 @@ const OrderPanel = () => {
   const isInteractionDisabled = isOrderInteractionDisabled() || isSubmitting;
 
   return (
-    <div className="w-96 bg-white border-s border-gray-200 flex flex-col h-[calc(100vh-4rem)] fixed end-0 z-10">
-      <div className="p-4 border-b border-gray-200 flex-shrink-0">
-        <OrderTabs disabled={isInteractionDisabled} />
+    <div className="w-96 bg-white border-s border-border flex flex-col h-[calc(100vh-4rem)] fixed end-0 z-10">
+      <div className="p-4 border-b border-border flex-shrink-0">
         <OrderTypeSelect disabled={isInteractionDisabled} />
         <div className="mt-3"><CustomerSelect disabled={isInteractionDisabled} /></div>
         <div className="mt-3 flex items-center justify-between">
@@ -242,9 +280,18 @@ const OrderPanel = () => {
                 )}
               >
                 <div className="flex items-center justify-between">
-                  <div className="flex-1 min-w-0">
+                  <div className="flex-1">
                     <div className="flex items-center justify-between">
                       <h3 className="font-medium text-gray-900 text-sm">{item.name}</h3>
+                      {orderId && kotState[item.item] && (
+                        <Badge
+                          size="sm"
+                          variant={KOT_BADGE[kotState[item.item]].variant}
+                          data-testid="kot-status-badge"
+                        >
+                          {KOT_BADGE[kotState[item.item]].label}
+                        </Badge>
+                      )}
                     </div>
                     {item.selectedVariant && (
                       <p className="text-sm text-gray-600">{item.selectedVariant.name}</p>
@@ -252,11 +299,6 @@ const OrderPanel = () => {
                     {item.selectedAddons && item.selectedAddons.length > 0 && (
                       <p className="text-sm text-gray-500">
                         {item.selectedAddons.map(addon => addon.name).join(', ')}
-                      </p>
-                    )}
-                    {item.comment && item.comment.trim() && (
-                      <p className="text-xs text-gray-500 italic mt-0.5 truncate">
-                        "{item.comment.trim()}"
                       </p>
                     )}
                     <p className="text-gray-600 text-sm">{formatCurrency(calculateItemTotal(item))}</p>
@@ -291,15 +333,25 @@ const OrderPanel = () => {
                         -
                       </Button>
                       <span className="w-6 text-center">{item.quantity}</span>
-                      <Button
-                        onClick={() => updateQuantity(item.uniqueId!, Math.round((item.quantity + 1) * 1000) / 1000)}
-                        variant="outline"
-                        size="icon"
-                        className="w-8 h-8 rounded-full"
-                        disabled={isInteractionDisabled}
-                      >
-                        +
-                      </Button>
+                      {(() => {
+                        const headroom = remainingHeadroom(
+                          availabilityByItem[item.item],
+                          cartQtyForItem(activeOrders, item.item),
+                        );
+                        const atCapacity = headroom !== undefined && headroom <= 0;
+                        return (
+                          <Button
+                            onClick={() => updateQuantity(item.uniqueId!, Math.round((item.quantity + 1) * 1000) / 1000)}
+                            variant="outline"
+                            size="icon"
+                            className="w-8 h-8 rounded-full"
+                            disabled={isInteractionDisabled || atCapacity}
+                            title={atCapacity ? t('cart.insufficient_capacity') : undefined}
+                          >
+                            +
+                          </Button>
+                        );
+                      })()}
                     </div>
                     
                     <Button
@@ -328,7 +380,7 @@ const OrderPanel = () => {
             )}
           </div>
           
-          <div className="p-4 border-t border-gray-200 flex-shrink-0 bg-white">
+          <div className="p-4 border-t border-border flex-shrink-0 bg-white">
             <div className="flex justify-between items-center mb-4">
               <div className="flex items-center gap-2">
                 <Button
